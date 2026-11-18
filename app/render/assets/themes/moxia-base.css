@@ -1,0 +1,57 @@
+
+#moxia { font-size: 16px; line-height: 1.75; color: #333; text-align: left; word-wrap: break-word;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif; }
+#moxia p { margin: 1em 0; }
+#moxia h1, #moxia h2, #moxia h3, #moxia h4, #moxia h5, #moxia h6 { margin: 1.8em 0 0.9em; font-weight: bold; line-height: 1.4; }
+#moxia h1 { font-size: 22px; }
+#moxia h2 { font-size: 19px; }
+#moxia h3 { font-size: 17px; }
+#moxia h4, #moxia h5, #moxia h6 { font-size: 16px; }
+#moxia ul, #moxia ol { margin: 1em 0; padding-left: 1.6em; }
+#moxia li { margin: 0.3em 0; }
+#moxia li p { margin: 0.3em 0; }
+#moxia strong { font-weight: bold; }
+#moxia img { display: block; max-width: 100%; margin: 0 auto; border-radius: 4px; }
+#moxia figure { margin: 1.6em 0; text-align: center; }
+#moxia figcaption { margin-top: 0.6em; font-size: 13px; line-height: 1.5; color: #999; }
+#moxia blockquote { margin: 1.4em 0; padding: 0.6em 1em; border-left: 3px solid #e3e3e3; color: #777; }
+#moxia blockquote p { margin: 0.4em 0; }
+#moxia hr { height: 1px; margin: 2.4em 0; border: 0; background: #e8e8e8; }
+#moxia a { color: var(--accent); text-decoration: none; }
+#moxia :not(pre) > code { margin: 0 2px; padding: 2px 5px; border-radius: 4px; font-size: 0.875em;
+  font-family: Menlo, Monaco, Consolas, "SF Mono", monospace; color: var(--accent); background: var(--accent-soft); }
+#moxia pre { margin: 1.4em 0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.65; }
+#moxia pre code { display: block; padding: 0; white-space: nowrap; color: inherit; background: none;
+  font-family: Menlo, Monaco, Consolas, "SF Mono", monospace; font-size: inherit; }
+#moxia .mac-dots { display: block; margin-bottom: 12px; }
+#moxia .table-wrap { margin: 1.4em 0; overflow-x: auto; }
+#moxia table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.6; }
+#moxia th, #moxia td { padding: 7px 10px; border: 1px solid #e6e6e6; }
+#moxia th { font-weight: bold; background: #f7f7f7; }
+#moxia .math-block { margin: 1.4em 0; text-align: center; overflow-x: auto; }
+#moxia .math-inline svg { vertical-align: middle; }
+#moxia .fn-ref { font-size: 12px; color: var(--accent); }
+#moxia .footnotes { margin-top: 2.8em; padding-top: 1em; border-top: 1px solid #eee; font-size: 13px; color: #888; }
+#moxia .footnotes-title { margin: 0 0 0.6em; font-size: 14px; font-weight: bold; color: #555; }
+#moxia .footnote-item { margin: 0.3em 0; line-height: 1.6; word-break: break-all; }
+#moxia .footnote-url { color: #aaa; }
+#moxia .eyebrow { margin: 0 0 0.6em; font-size: 12px; font-weight: bold; letter-spacing: 2px; color: var(--accent); }
+#moxia .brand-footer { margin: 3em 0 0.5em; font-size: 13px; letter-spacing: 2px; text-align: center; color: var(--accent); }
+#moxia .callout { margin: 1.4em 0; padding: 0.8em 1em; border-radius: 6px; background: var(--accent-soft); }
+#moxia .callout p { margin: 0.4em 0; }
+#moxia .callout-title { font-weight: bold; color: var(--accent); }
+#moxia .callout-warning, #moxia .callout-caution { background: #fdf2ec; }
+#moxia .callout-warning .callout-title, #moxia .callout-caution .callout-title { color: #b4532a; }
+#moxia .data-cards { display: flex; flex-wrap: wrap; margin: 1.4em -4px; }
+#moxia .data-card { flex: 1 1 0; min-width: 0; margin: 4px; padding: 14px 10px; border-radius: 8px; background: var(--accent-soft); }
+#moxia .data-label, #moxia .data-note { margin: 0; font-size: 12px; line-height: 1.5; color: #888; }
+#moxia .data-value { margin: 4px 0; font-size: 20px; font-weight: bold; line-height: 1.3; color: var(--accent);
+  font-family: "DIN Alternate", "DIN Condensed", Arial, sans-serif; }
+#moxia .bar-chart { margin: 1.4em 0; padding: 16px 12px 12px; border-radius: 8px; background: #fafafa; }
+#moxia .chart-title { margin: 0 0 12px; font-size: 14px; font-weight: bold; }
+#moxia .bar-row { display: flex; align-items: flex-end; }
+#moxia .bar-col { flex: 1 1 0; margin: 0 4px; text-align: center; }
+#moxia .bar-value { display: block; font-size: 12px; line-height: 1.4; color: #666; }
+#moxia .bar { width: 70%; margin: 4px auto 0; border-radius: 4px 4px 0 0; background: var(--accent); }
+#moxia .bar-label { display: block; margin-top: 6px; font-size: 12px; line-height: 1.4; color: #888; }
+#moxia .chart-note { margin: 10px 0 0; font-size: 12px; color: #999; }

@@ -1,0 +1,28 @@
+/*
+name: 拾光
+description: 暖橙荧光笔：关键句像被划了记号笔，轻快有温度，适合生活、读书与个人理财随笔。
+accent: #e07b2a
+guide:
+ - 暖橙荧光笔风格：小节标题和关键句像被划了一道记号笔，轻松但不随便。
+ - 小节标题写成 `## 01 / 短语`，不超过 16 字，用一句大白话说清这一节讲什么。
+ - 段落 2–4 行，语气可以亲切，但仍一句一个意思，不堆形容词。
+ - 强调：关键数字和结论用 `**粗体**`（荧光笔底色），核心判断用 `++下划线++` 3–4 处。
+ - 引用块是浅米色圆角卡片，放金句或个人感受，全文 2–4 处。
+ - 三个以上可比较的数字用表格；表头浅米底。
+ - 配图偏日常（书桌、咖啡、记账本）；不用 emoji，不出现「稳赚」「躺赚」。
+*/
+
+/* 以下规则原样来自 Moxia 的 Renderer/themes/shiguang.css，未作任何修改。 */
+
+/* 拾光：暖橙荧光笔，适合生活与读书笔记 */
+#moxia { --accent: #e07b2a; --accent-mark: #fde3c7; color: #3d3833; line-height: 1.85; }
+#moxia h1 { margin-top: 0.6em; font-size: 22px; text-align: center; color: #2e2924; }
+#moxia h2 { margin-top: 2.2em; font-size: 19px; color: #2e2924; }
+#moxia h2 .title { padding: 0 4px; background: linear-gradient(transparent 58%, var(--accent-mark) 58%); }
+#moxia h3 { font-size: 17px; color: var(--accent); }
+#moxia strong { padding: 0 2px; color: #2e2924; background: linear-gradient(transparent 60%, var(--accent-mark) 60%); }
+#moxia blockquote { padding: 0.8em 1.1em; border-left: 0; border-radius: 8px; color: #7a6e63; background: #fbf6f0; }
+#moxia :not(pre) > code { color: #c4621a; background: #fdf1e6; }
+#moxia img { border-radius: 8px; }
+#moxia hr { height: 0; border-top: 1px dashed #e8d9c8; background: none; }
+#moxia th { background: #fbf6f0; }

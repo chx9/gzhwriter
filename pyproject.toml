@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gzh-langraph"
+version = "0.1.0"
+description = "稿纸 · 独立公众号写作工作台：LangGraph + FastAPI + 资料面板"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.34",
+  "langgraph>=1.0",
+  "langgraph-checkpoint-sqlite>=2.0",
+  "openai>=1.60",
+  "httpx>=0.27",
+  "python-multipart>=0.0.20",
+  "python-docx>=1.1",
+  "beautifulsoup4>=4.13",
+  "regex>=2024.11.6",
+  "python-dotenv>=1.0",
+  "yt-dlp>=2024.8.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-timeout>=2.3"]
+
+[project.scripts]
+gzh-langraph = "app.main:run"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.render" = [
+  "assets/*.css",
+  "assets/default.txt",
+  "assets/themes/*.css",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

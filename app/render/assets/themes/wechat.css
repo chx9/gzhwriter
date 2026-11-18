@@ -1,0 +1,42 @@
+/*
+name: 公众号
+description: 微信公众号主流排版：居中小节标题 + 绿色色条，浅灰引用卡片，圆角图片。
+accent: #07c160
+guide:
+ - 小节标题写成 `## 01 / 短语`（数字编号 + 斜杠 + 短语），不要用一级标题。
+ - 观点、结论、需要读者停下来的判断用引用块（`>`），一段一到两句；全文 2–4 处。
+ - 关键数字和结论词用 `**粗体**`，每 2–3 段一处；全文核心判断用 `++下划线++` 3–4 处；反常识事实用 `==高亮==` 不超过 2 处。
+ - 提示用 `> [!TIP] 理财小建议`，风险提示用 `> [!WARNING] 风险提醒`；一个提示框里只说一件事。
+ - 三个以上可比较的数字用表格；整段不要加粗、不要整段居中。
+ - 全文 2–4 张配图，用占位符 `![图注](ww-img:pending "google: …")`。
+*/
+
+/* 公众号 · 覆盖 BASE_CSS 的变量与规则；改这个文件只影响选了这个主题的对话。 */
+:root {
+  --accent: #07c160;
+  --accent-soft: rgba(7,193,96,0.12);
+  --text: #3f3f3f;
+  --title: #1f1f1f;
+  --muted: #999999;
+  --bg: #ffffff;
+  --panel: #f7f7f7;
+  --line: #e5e5e5;
+  --radius: 6px;
+  --fs: 15px;
+  --lh: 1.75;
+}
+.wx-article { padding: 0 4px; }
+.wx-h2 {
+  font-size: 18px;
+  text-align: center;
+  margin: 2.2em auto 1.3em;
+  padding: 0 0 8px;
+  border-left: 0;
+  border-bottom: 3px solid var(--accent);
+  display: table;
+}
+.wx-h3 { padding-left: 8px; border-left: 4px solid var(--accent); }
+.wx-h4 { color: var(--accent); }
+.wx-p { text-align: justify; }
+.wx-quote { background: #f7f7f7; border-left: 4px solid var(--accent); color: #555555; }
+.wx-hr { border-top: 1px dashed #d9d9d9; }

@@ -1,0 +1,112 @@
+/*
+name: 慢慢变富
+description: 森林绿 + 奶油白 + 焦糖金：宋体标题、观点卡片、提示框、风险框、数据卡片，温暖治愈的生活理财感。
+accent: #254D3C
+guide:
+ - 这是「慢慢变富」公众号的品牌排版：温暖、治愈、轻奢杂志感，像一个懂理财的朋友在陪读者慢慢变好。
+ - 小节标题写成 `## 01 / 先建立储蓄习惯`（两位编号 + 斜杠 + 短语，短语不超过 16 字，不加感叹号）。
+ - 段落短：手机上每段 2–4 行，一段只讲一件事；开头不要铺背景，第一句就给出具体场景或反常识的判断。
+ - 观点卡片：一节里最重要的判断单独写成一个引用块（`>`），只放一句话，全文 3–5 处。
+ - 提示框用 `> [!TIP] 理财小建议`，风险提醒用 `> [!WARNING] 风险提醒`（理财类文章必须至少有一个风险提醒）；不要用 emoji。
+ - 数据卡片：三个以内可对比的数字用 ```cards```，每行 `标签 | 数值 | 说明`；数字必须真实可溯源，不确定就不要放卡片。
+ - 趋势/对比可用 ```chart```（`名称 | 数值`，可带 title / note）；配图用占位符，偏生活场景（记账、咖啡、绿植、通勤）而不是金币堆砌。
+ - 强调：关键概念用 `**粗体**`（绿色），比例数字可以用 `*20%*`（焦糖金）。不用高亮底色，不用第二种强调色。
+ - 金句、结尾收束可以再用一个引用块；不要出现「稳赚」「躺赚」「闭眼入」，不虚构收益数据。
+*/
+
+/* 慢慢变富 · 覆盖 BASE_CSS 的变量与规则；改这个文件只影响选了这个主题的对话。 */
+:root {
+  --accent: #254D3C;
+  --accent-soft: #E8EDE4;
+  --text: #463D35;
+  --title: #254D3C;
+  --muted: #887B6E;
+  --bg: #F7F3EA;
+  --panel: #FFFFFF;
+  --line: #EAE3D5;
+  --radius: 10px;
+  --fs: 15px;
+  --lh: 2;
+  --letter: 0.5px;
+  --font-body: 'Noto Sans SC','Source Han Sans SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+  --font-title: 'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',serif;
+}
+.wx-article {
+  background: #F7F3EA;
+  padding: 28px 20px;
+  border-radius: 12px;
+  color: #463D35;
+}
+.wx-p { margin: 16px 0; font-size: 15px; line-height: 2; text-align: justify; }
+.wx-h2 {
+  font-family: var(--font-title);
+  font-size: 20px;
+  line-height: 1.5;
+  color: #254D3C;
+  margin: 32px 0 16px;
+  padding-left: 12px;
+  border-left: 4px solid #B58A54;
+  letter-spacing: 0.5px;
+}
+.wx-h3 {
+  font-family: var(--font-title);
+  font-size: 17px;
+  color: #254D3C;
+  margin: 24px 0 12px;
+  padding: 0;
+  border: 0;
+}
+.wx-h4 { font-family: var(--font-title); font-size: 15px; color: #B58A54; }
+strong { color: #254D3C; font-weight: 600; }
+em { color: #B58A54; font-style: normal; }
+u { border-bottom: 2px solid #B58A54; padding-bottom: 0; }
+mark { background: #E8EDE4; color: #254D3C; border-radius: 3px; padding: 1px 4px; }
+code { background: #EAE3D5; color: #9C543D; border-radius: 4px; }
+.wx-pre { background: #FFFFFF; border: 1px solid #EAE3D5; }
+.wx-quote {
+  margin: 25px 0;
+  padding: 20px;
+  background: #EAE3D5;
+  border-left: 0;
+  border-radius: 10px;
+  color: #254D3C;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.85;
+}
+.wx-hr { border-top: 1px solid #EAE3D5; margin: 30px 0; }
+.wx-img { border-radius: 10px; }
+.wx-caption { color: #887B6E; font-size: 13px; }
+.wx-slot { border-color: #B58A54; border-radius: 10px; background: #FFFFFF; color: #887B6E; }
+.wx-table { font-size: 14px; }
+.wx-th { background: #EAE3D5; border: 1px solid #E3D8C6; color: #254D3C; }
+.wx-td { border: 1px solid #E3D8C6; color: #463D35; }
+.wx-callout {
+  margin: 25px 0;
+  padding: 20px;
+  border-radius: 10px;
+  border-left: 0;
+  font-size: 15px;
+  line-height: 1.9;
+}
+.wx-callout-title { font-size: 15px; margin-bottom: 8px; }
+.wx-callout-body { font-size: 15px; line-height: 1.9; }
+.wx-callout-tip { background: #E8EDE4; color: #254D3C; }
+.wx-callout-note { background: #EAE3D5; color: #254D3C; }
+.wx-callout-warn { background: #F5E9E2; color: #9C543D; }
+.wx-cards { margin: 25px 0; }
+.wx-card { background: #FFFFFF; border-radius: 12px; margin: 0 1% 10px; padding: 16px 10px; }
+.wx-card-label { color: #887B6E; font-size: 13px; }
+.wx-card-value {
+  font-family: 'DIN Alternate','Playfair Display',Arial,sans-serif;
+  color: #254D3C;
+  font-size: 24px;
+  margin: 8px 0;
+}
+.wx-card-note { color: #887B6E; font-size: 13px; }
+.wx-chart { background: #FFFFFF; border-radius: 12px; padding: 18px 16px 14px; }
+.wx-chart-title { color: #254D3C; font-size: 16px; }
+.wx-bar { background: #254D3C; border-radius: 5px 5px 0 0; }
+.wx-bar-alt { background: #B58A54; }
+.wx-chart-bars { border-bottom: 1px solid #EAE3D5; }
+.wx-chart-note { color: #887B6E; }

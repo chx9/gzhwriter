@@ -1,0 +1,43 @@
+/*
+name: 深蓝商务
+description: 财经简报感：深海军蓝单一强调色，信息密度高，居中小节标题配短色条，适合长文。
+accent: #1f3a68
+guide:
+ - 像一份写给普通人看的财经简报：沉稳、可信、信息密度高。
+ - 小节标题写成 `## 01 / 短语`（不超过 14 字，像报告目录，不用感叹号和网络热词）。
+ - 强调只服务于数字和结论：`**粗体**` 每 2–3 段一处；`++下划线++` 每节最多 1 处；`==高亮==` 全文不超过 2 处。
+ - 一节的结论小结用引用块；不要连续多个引用块。
+ - 三个以上可比较的数字一律用表格：表格前一句说明看什么，表格后一句给结论。
+ - 配图偏商务（图表、网点、资产配置示意），不用卡通和表情包。
+*/
+
+/* 深蓝商务 · 覆盖 BASE_CSS 的变量与规则；改这个文件只影响选了这个主题的对话。 */
+:root {
+  --accent: #1f3a68;
+  --accent-soft: rgba(31,58,104,0.12);
+  --text: #3f3f3f;
+  --title: #1f3a68;
+  --muted: #8a8a8a;
+  --bg: #ffffff;
+  --panel: #f5f6f8;
+  --line: #dfe3ea;
+  --radius: 4px;
+  --fs: 15px;
+  --lh: 1.75;
+  --letter: 0.5px;
+}
+.wx-article { padding: 0 4px; }
+.wx-h2 {
+  font-size: 18px;
+  text-align: center;
+  margin: 2.4em auto 1.3em;
+  padding: 0 0 8px;
+  border-left: 0;
+  border-bottom: 2px solid var(--accent);
+  display: table;
+  letter-spacing: 1px;
+}
+.wx-h3 { padding-left: 8px; border-left: 3px solid var(--accent); }
+.wx-quote { background: #f5f6f8; border-left: 3px solid var(--accent); color: #444444; }
+.wx-th { background: #eef1f6; }
+.wx-hr { border-top: 1px solid var(--line); }

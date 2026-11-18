@@ -1,0 +1,27 @@
+/*
+name: 素笺
+description: 克制留白，居中标题配青绿下划线，几乎不加装饰，适合任何题材的稳妥默认。
+accent: #1f7a6b
+guide:
+ - 克制、留白、不抢戏：装饰只有居中小标题下的一道青绿短线，适合当默认风格。
+ - 小节标题写成 `## 01 / 短语`，不超过 14 字，居中，语气平实，不用问句和感叹号。
+ - 段落短，一段一件事；开头第一句就给判断，不铺背景。
+ - 强调：关键数字用 `**粗体**`，核心判断用 `++下划线++` 3–4 处；高亮不超过 2 处。
+ - 引用块左细线配灰字，放一句过渡或小结，全文 2–4 处，不要长引用。
+ - 三个以上可比较的数字用表格；表头浅灰底，不加粗边框。
+ - 配图不喧哗；不用 emoji、不用第二种强调色、不喊口号。
+*/
+
+/* 以下规则原样来自 Moxia 的 Renderer/themes/sujian.css，未作任何修改。 */
+
+/* 素笺：克制、留白，适合大多数文章 */
+#moxia { --accent: #1f7a6b; color: #3a3a3a; letter-spacing: 0.3px; }
+#moxia p { margin: 1.1em 0; }
+#moxia h1 { margin-top: 0.6em; font-size: 23px; text-align: center; color: #222; }
+#moxia h2 { margin-top: 2.2em; text-align: center; font-size: 19px; color: #222; }
+#moxia h2 .title { display: inline-block; padding: 0 2px 6px; border-bottom: 2px solid var(--accent); }
+#moxia h3 { font-size: 17px; color: var(--accent); }
+#moxia h4 { color: #555; }
+#moxia strong { color: #222; }
+#moxia blockquote { border-left: 3px solid var(--accent-light); color: #888; }
+#moxia hr { width: 48px; height: 2px; margin: 2.6em auto; background: var(--accent-light); }
