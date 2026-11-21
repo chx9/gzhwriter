@@ -261,9 +261,9 @@ def lint_article(
             if re.match(r"^https?://mmbiz\.qpic\.cn/", source):
                 continue
             if not re.match(r"^[a-z][a-z0-9+.-]*:", source, re.I):
-                add("info", "image-local", f"本地图片 {truncate(source, 60)}：预览里能看到；复制到公众号后要在编辑器里重新上传这张图", **where)
+                add("info", "image-local", f"本地图片 {truncate(source, 60)}：复制到公众号时会替换成【配图 NN】占位文字，粘贴后按编号手动补图", **where)
                 continue
-            add("warning", "image-not-uploaded", f"图片 {truncate(source, 60)} 不是微信素材库地址，粘贴后可能无法显示；请在公众号编辑器里重新上传", **where)
+            add("warning", "image-not-uploaded", f"图片 {truncate(source, 60)} 不是微信素材库地址，粘贴后可能无法显示；请在公众号编辑器里手动补图", **where)
         external = [
             match.group(1)
             for match in re.finditer(r"\]\((https?://[^)\s]+)\)", plain)

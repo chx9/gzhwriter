@@ -22,7 +22,7 @@
 - **chatbox 改稿**：底部是对文章说话的输入框（Enter 发送）；在正文里选中一段再发，就只改那一部分；AI 的修改以 diff 卡片呈现，接受才生效。
 - **批注在正文上做**：正文里选中文字 → 加批注；已批注的原文像荧光笔一样高亮，点击即可浮出批注内容；批注可一键全部交给 AI 改。
 - **标题 5 选 1**：正文生成后，标题候选出现在编辑器上方，点一个就写回 frontmatter 并排版。
-- **文章风格全局一份**：顶栏「风格」页定义文笔风格，保存后一键同步到所有文章；个别文章单独改过的会标出来，可选择保留或覆盖。
+- **文章风格按文件管理**：顶栏「风格」页可以新建多份规则文件（如「文笔风格」「标题规则」「禁用词」），左侧切换、单独编辑、删除；保存后同步到所有文章，发给模型时按文件顺序合并。
 - **排版可交付**：Markdown → 语义 HTML → 主题 CSS 算成行内样式；输出 `dist/article.html`，直接粘进公众号编辑器。
 - **导入导出**：整篇文章（正文、素材、配图、过程稿、排版产物）导出为 ZIP；导入支持 ZIP 整包或单篇 Markdown，自动换新 slug 并重排。
 - **离线可跑**：没有 `OPENAI_API_KEY` 时自动进入演示模式，界面明确标注。
@@ -79,6 +79,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765
 | `ANTHROPIC_AUTH_TOKEN` | 空 | Anthropic 网关 Token（`Authorization: Bearer`） |
 | `GZH_MAX_TOKENS` | `1000000` | 单次输出上限；网关拒绝时自动降级重试到更小的值 |
 | `GZH_MODEL` | 按提供商 | anthropic 默认 `deepseek-v4.1-flash-1017`，openai 默认 `gpt-4o-mini` |
+| `GZH_MODELS` | 空 | 可选多个模型：`provider:model` 逗号分隔；网页顶栏点模型名切换（如 `anthropic:deepseek-v4.1-flash-1017,openai:gpt-4o-mini`） |
 | `OPENAI_API_KEY` | 空 | OpenAI-compatible 接口的 Key |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | 可换 DeepSeek / 通义 / 本地 vLLM |
 | `GZH_DATA_DIR` | `./workspace` | 项目、SQLite、主题的根目录 |
@@ -87,28 +88,8 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765
 | `GZH_TARGET_CHARS` | `2800` | 默认目标字数 |
 | `GZH_CITATION_MODE` | `strip` | `strip` / `references` / `footnotes` |
 | `GZH_SEED` | `1` | 首次启动生成示例 |
-| `GZH_BILIBILI_BROWSER` | 空 | B 站字幕：从哪个浏览器读登录态（chrome / safari / edge / firefox…） |
-| `GZH_BILIBILI_COOKIE_FILE` | 空 | B 站字幕：Netscape 格式 cookies.txt 路径（与上一项二选一） |
 
 API Key 只在服务端使用，不会返回给前端。
-
-## B 站视频字幕
-
-素材面板的「B站」标签：粘贴视频链接 → 取播放器已有字幕（含 AI 字幕）→ 转成口语稿素材（`Sxx`，带 `[¶n @mm:ss]` 锚点）。
-
-实现方式与 [Diorvh/codex-bilibili-subtitles](https://github.com/Diorvh/codex-bilibili-subtitles) 一致：yt-dlp 只下载字幕轨道，不下载音视频；登录态通过 `--cookies-from-browser` 在进程内读取，不导出 Cookie。
-
-B 站的字幕轨道（尤其 AI 字幕）**需要登录才能读取**：
-
-```bash
-# 方式一：在 Chrome/Safari 登录 B 站，然后（读 Chrome Cookie 前建议先退出 Chrome）
-GZH_BILIBILI_BROWSER=chrome
-
-# 方式二：自己导出 Netscape cookies.txt，指向它
-GZH_BILIBILI_COOKIE_FILE=/path/to/cookies.txt
-```
-
-没配置或没登录时会明确报错，并提示下一步。只支持单个视频链接（不支持播放列表/批量）。
 
 ## 工作流（后台）
 
@@ -170,8 +151,9 @@ workspace/
 | POST | `/api/projects/{slug}/title` | 选定标题/摘要，写回并排版 |
 | GET | `/api/projects/{slug}/deliverable` | 成稿 HTML / stale / 检查 |
 | POST | `/api/projects/{slug}/render` | 重新排版 |
-| GET/POST | `/api/projects/{slug}/slots` · `slots/fill|clear` | 配图图位 |
+| GET/POST | `/api/projects/{slug}/slots` · `slots/fill|clear|caption` | 配图图位 / 补图 / 退回 / 改图注 |
 | GET/POST/PATCH/DELETE | `/api/projects/{slug}/comments...` | 行批注 |
+| GET/POST/PUT/DELETE | `/api/style` · `/api/style/files[/{filename}]` | 全局风格：读取 / 新建规则文件 / 保存 / 删除 |
 | GET | `/api/themes` | 主题库 |
 
 ## 测试
@@ -186,7 +168,7 @@ source .venv/bin/activate && pytest -q
 ## 已知边界
 
 - 单用户本地工具；没有账号、协作、云端部署。
-- 不做公众号草稿推送；图片需在公众号编辑器里重新上传。
+- 不做公众号草稿推送；复制到公众号时本地图片会替换成【配图 NN】占位文字（微信服务器抓不到 localhost），粘贴后按编号手动补图；配图面板可改图注、可一键复制图片。
 - 不支持 PDF / 音频 / 视频直接解析。
 - 演示模式只保证流程与结构，内容质量不代表真实模型。
 - 改稿以 chatbox / 批注 → diff 确认为主。

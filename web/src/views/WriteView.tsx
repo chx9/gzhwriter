@@ -46,6 +46,9 @@ export function WriteView({
   const [saving, setSaving] = useState(false)
   const [preview, setPreview] = useState<{ html: string; title: string; minutes: number; at: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [titleDraft, setTitleDraft] = useState(summary.untitled ? '' : summary.title)
+  const [titleSaving, setTitleSaving] = useState(false)
+  const skipTitleBlur = useRef(false)
   const [editing, setEditing] = useState(false)
   const [editElapsed, setEditElapsed] = useState(0)
   const [feedback, setFeedback] = useState('')
@@ -85,6 +88,31 @@ export function WriteView({
   const running = state?.status === 'running'
   const stage = state?.stage || 'materials'
   const awaitingTitle = stage === 'awaiting_title'
+
+  useEffect(() => {
+    setTitleDraft(summary.untitled ? '' : summary.title)
+  }, [summary.slug, summary.title, summary.untitled])
+
+  const saveTitle = async () => {
+    const next = titleDraft.trim()
+    if (!next) {
+      setTitleDraft(summary.untitled ? '' : summary.title)
+      return
+    }
+    if (next === summary.title) return
+    setTitleSaving(true)
+    try {
+      await api.patch(`/api/projects/${slug}/title`, { title: next })
+      notify('标题已更新', 'ok')
+      onRefresh()
+      onSaved()
+    } catch (error: any) {
+      notify(error.message, 'error')
+      setTitleDraft(summary.title)
+    } finally {
+      setTitleSaving(false)
+    }
+  }
   const done = stage === 'done'
   const openComments = comments.filter((comment) => comment.status === 'open')
 
@@ -707,7 +735,30 @@ export function WriteView({
       <div className="write-head">
         <div className="write-head-main">
           <p className="eyebrow">{summary.slug}</p>
-          <h1>{summary.title}</h1>
+          <input
+            className="write-title"
+            value={titleDraft}
+            onChange={(event) => setTitleDraft(event.target.value)}
+            onBlur={() => {
+              if (skipTitleBlur.current) {
+                skipTitleBlur.current = false
+                return
+              }
+              saveTitle()
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') event.currentTarget.blur()
+              if (event.key === 'Escape') {
+                skipTitleBlur.current = true
+                setTitleDraft(summary.title)
+                event.currentTarget.blur()
+              }
+            }}
+            placeholder={summary.untitled ? '标题待生成（也可以自己填）' : '文章标题'}
+            aria-label="文章标题"
+            spellCheck={false}
+            disabled={titleSaving}
+          />
         </div>
         <div className="write-head-actions">
           {dirty ? <Badge tone="warn">未保存</Badge> : saving ? <Badge>保存中…</Badge> : null}

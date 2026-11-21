@@ -1,33 +1,41 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import type { StyleOverview } from '../types'
-import { Badge, Icon, Spinner, useToast } from '../ui'
+import type { StyleFile, StyleOverview } from '../types'
+import { Badge, Icon, Markdown, Spinner, useToast } from '../ui'
 
 const HINT = '决定 AI 写作时的语气、结构、句子和用词。保存后再写、再改、再评审，都按这份要求来。'
 
 export function StyleView() {
   const { notify } = useToast()
   const [overview, setOverview] = useState<StyleOverview | null>(null)
+  const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
-  const [syncing, setSyncing] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [createBusy, setCreateBusy] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+  const newTitleRef = useRef<HTMLInputElement>(null)
 
-  const current = overview?.files[0] || null
+  const files = overview?.files || []
+  const current = files.find((file) => file.filename === selected) || files[0] || null
   const dirty = Boolean(current && draft !== current.text)
   const count = useMemo(() => [...draft.replace(/\s+/g, '')].length, [draft])
   const maxChars = overview?.maxChars || 12000
-  const projects = overview?.projects || []
-  const customized = projects.filter((project) => project.changed.length > 0)
 
-  const apply = useCallback((next: StyleOverview) => {
+  const apply = useCallback((next: StyleOverview, target?: string) => {
     setOverview(next)
-    setDraft(next.files[0]?.text ?? '')
+    const name =
+      target && next.files.some((file) => file.filename === target)
+        ? target
+        : next.files[0]?.filename || ''
+    setSelected(name)
+    setDraft(next.files.find((file) => file.filename === name)?.text ?? '')
   }, [])
 
   const load = useCallback(() => {
     api
       .get<StyleOverview>('/api/style')
-      .then(apply)
+      .then((next) => apply(next))
       .catch((error: any) => notify(error.message, 'error'))
   }, [apply, notify])
 
@@ -35,63 +43,60 @@ export function StyleView() {
     load()
   }, [load])
 
-  const save = useCallback(
-    async (overwriteCustom = false) => {
-      if (!current || !dirty) return
-      setSaving(true)
-      try {
-        const next = await api.put<StyleOverview>('/api/style', {
-          kind: current.kind,
-          text: draft,
-          sync: true,
-          overwriteCustom,
-        })
-        apply(next)
-        const result = next.result
-        if (result?.skipped.length) {
-          notify(`已保存，同步 ${result.synced} 篇；${result.skipped.length} 篇有单独改动，未覆盖`, 'ok')
-        } else {
-          notify(`已保存并同步到 ${result?.synced ?? 0} 篇文章`, 'ok')
-        }
-      } catch (error: any) {
-        notify(error.message, 'error')
-      } finally {
-        setSaving(false)
-      }
-    },
-    [apply, current, dirty, draft, notify],
-  )
-
-  const sync = async (target?: string) => {
-    if (!current) return
-    setSyncing(target || 'all')
-    try {
-      const next = await api.post<StyleOverview>('/api/style/sync', {
-        kind: current.kind,
-        slug: target,
-        overwriteCustom: true,
-      })
-      apply(next)
-      notify(target ? '已覆盖到这篇' : '已覆盖到所有文章', 'ok')
-    } catch (error: any) {
-      notify(error.message, 'error')
-    } finally {
-      setSyncing(null)
-    }
+  const pick = (file: StyleFile) => {
+    if (file.filename === current?.filename) return
+    if (dirty && !window.confirm('当前文件还没保存，切换会丢掉修改。继续？')) return
+    setSelected(file.filename)
+    setDraft(file.text)
   }
 
-  const reset = async () => {
-    if (!current) return
-    if (!window.confirm('把文笔风格恢复为默认内容？所有文章的单独改动都会被覆盖。')) return
+  const save = useCallback(async () => {
+    if (!current || !dirty) return
     setSaving(true)
     try {
-      const next = await api.post<StyleOverview>('/api/style/reset', { kind: current.kind, sync: true })
-      apply(next)
-      notify('已恢复默认并同步到所有文章', 'ok')
+      const next = await api.put<StyleOverview>(`/api/style/files/${encodeURIComponent(current.filename)}`, {
+        text: draft,
+        sync: true,
+      })
+      apply(next, current.filename)
+      notify('已保存并同步到所有文章', 'ok')
     } catch (error: any) {
       notify(error.message, 'error')
     } finally {
       setSaving(false)
+    }
+  }, [apply, current, dirty, draft, notify])
+
+  const create = async () => {
+    const title = newTitle.trim()
+    if (!title || createBusy) return
+    setCreateBusy(true)
+    try {
+      const next = await api.post<StyleOverview & { created?: { filename: string } }>('/api/style/files', { title })
+      apply(next, next.created?.filename)
+      setCreating(false)
+      setNewTitle('')
+      notify('已新建规则文件', 'ok')
+    } catch (error: any) {
+      notify(error.message, 'error')
+    } finally {
+      setCreateBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (creating) newTitleRef.current?.focus()
+  }, [creating])
+
+  const remove = async (file: StyleFile) => {
+    if (dirty && file.filename === current?.filename && !window.confirm('当前文件有未保存修改，确定删除？')) return
+    if (!window.confirm(`删除「${file.title || file.filename}」？所有文章里的这份副本也会删除。`)) return
+    try {
+      const next = await api.del<StyleOverview>(`/api/style/files/${encodeURIComponent(file.filename)}`)
+      apply(next)
+      notify('已删除规则文件', 'ok')
+    } catch (error: any) {
+      notify(error.message, 'error')
     }
   }
 
@@ -109,16 +114,8 @@ export function StyleView() {
   return (
     <div className="style-view">
       <header className="style-head">
-        <div>
-          <p className="eyebrow">GLOBAL STYLE · 所有文章共用</p>
-          <h1>文章风格</h1>
-          <p className="muted">在这里定义一次，之后每篇文章的写作、改稿和评审都按它来。保存时会同步到所有文章。</p>
-        </div>
         <div className="write-head-actions">
-          {dirty ? <Badge tone="warn">未保存</Badge> : <Badge tone="ok">已同步</Badge>}
-          <button className="button button-ghost button-small" onClick={reset} disabled={saving || !overview}>
-            恢复默认
-          </button>
+          {dirty ? <Badge tone="warn">未保存</Badge> : <Badge tone="ok">已保存</Badge>}
           <button className="button button-primary button-small" onClick={() => save()} disabled={saving || !dirty}>
             {saving ? '保存中…' : '保存并应用'}
           </button>
@@ -127,49 +124,68 @@ export function StyleView() {
 
       <div className="style-split">
         <aside className="style-side">
-          <div className="style-files">
-            <div className="style-sync-head">
-              <p className="eyebrow">应用状态</p>
-              <span className="muted">{projects.length} 篇</span>
-            </div>
-            {projects.length === 0 ? (
-              <p className="muted style-empty">还没有文章。</p>
-            ) : (
-              <div className="style-projects">
-                {projects.map((project) => {
-                  const changedHere = project.changed.length > 0
-                  return (
-                    <div key={project.slug} className="style-project">
-                      <span className="style-project-title" title={project.title}>
-                        {project.title}
-                      </span>
-                      {changedHere ? (
-                        <button
-                          className="button button-ghost button-small"
-                          onClick={() => sync(project.slug)}
-                          disabled={Boolean(syncing)}
-                          title="用全局文笔风格覆盖这篇的单独改动"
-                        >
-                          {syncing === project.slug ? '覆盖中…' : '覆盖'}
-                        </button>
-                      ) : (
-                        <span className="badge badge-ok">跟随</span>
-                      )}
-                    </div>
-                  )
-                })}
+          <div className="style-docs">
+            {files.map((file) => (
+              <div key={file.filename} className={`style-doc ${file.filename === current?.filename ? 'active' : ''}`}>
+                <button className="style-doc-main" onClick={() => pick(file)} title={file.filename}>
+                  <span className="style-doc-title">{file.title || file.filename}</span>
+                  <small>{file.bytes} B</small>
+                </button>
+                {files.length > 1 ? (
+                  <button
+                    className="style-doc-del"
+                    onClick={() => remove(file)}
+                    title="删除这份规则"
+                    aria-label={`删除 ${file.title || file.filename}`}
+                  >
+                    <Icon name="trash" size={12} />
+                  </button>
+                ) : null}
               </div>
-            )}
-            {customized.length > 0 ? (
-              <button className="button button-secondary button-small" onClick={() => sync()} disabled={Boolean(syncing)}>
-                {syncing === 'all' ? '覆盖中…' : `全部覆盖（${customized.length} 篇）`}
+            ))}
+            {creating ? (
+              <div className="style-doc-new">
+                <input
+                  ref={newTitleRef}
+                  className="style-doc-new-input"
+                  value={newTitle}
+                  placeholder="规则名称，如：标题规则"
+                  maxLength={60}
+                  onChange={(event) => setNewTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') create()
+                    if (event.key === 'Escape') {
+                      setCreating(false)
+                      setNewTitle('')
+                    }
+                  }}
+                />
+                <div className="style-doc-new-actions">
+                  <button className="button button-primary button-small" onClick={create} disabled={!newTitle.trim() || createBusy}>
+                    {createBusy ? '新建中…' : '新建'}
+                  </button>
+                  <button
+                    className="button button-ghost button-small"
+                    onClick={() => {
+                      setCreating(false)
+                      setNewTitle('')
+                    }}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                className="style-doc-add"
+                onClick={() => {
+                  setNewTitle('')
+                  setCreating(true)
+                }}
+              >
+                ＋ 新建规则
               </button>
-            ) : null}
-          </div>
-
-          <div className="style-side-note">
-            <Icon name="spark" size={14} />
-            <p>文笔风格管「怎么写」。版面样式仍然由每篇文章选的「排版主题」决定。</p>
+            )}
           </div>
         </aside>
 
@@ -182,12 +198,17 @@ export function StyleView() {
           </div>
           {current ? (
             <>
-              <textarea
-                className="style-editor"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                spellCheck={false}
-              />
+              <div className="style-editor-split">
+                <textarea
+                  className="style-editor"
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  spellCheck={false}
+                />
+                <div className="style-preview">
+                  <Markdown text={draft} />
+                </div>
+              </div>
               <div className="style-editor-foot">
                 <span className="muted">{HINT}</span>
                 <span className="muted">⌘S 保存</span>

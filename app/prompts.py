@@ -60,7 +60,7 @@ def brief_prompt(*, title: str, topic: str, goal: str, audience: str, target_cha
             "role": "user",
             "content": f"""为下面这篇文章写选题简报（brief.md），供用户确认。
 
-标题/选题：{title or topic}
+标题/选题：{title or topic or '（未定；请根据素材给出一个工作标题）'}
 用户目标：{goal or '（未填写）'}
 目标读者：{audience or '（未填写）'}
 目标篇幅：约 {target_chars} 字
@@ -155,6 +155,8 @@ def outline_prompt(*, brief: str, material_context: str, feedback: str = "") -> 
 - 节与节之间要有推进关系（是什么 → 为什么 → 意味着什么），不要平铺罗列。
 - 角度必须是你自己的，不要沿用某份素材的标题、开头和章节顺序。
 - 事实和数据后面标素材锚点，精确到段落或时间段；作者判断标 [观点]。
+- 数字结论必须和素材里的计算一致。素材标题里的数字（例如「12 倍市盈率」）不要直接当成正文结论；如果标题和正文口径冲突，以正文计算为准。
+- 只输出大纲正文。不要写「已按意见重排」「产出文件是…」「下一步等你确认」这类对话说明，也不要在大纲前后加分隔线和总结。
 
 brief：
 {brief}
@@ -174,7 +176,7 @@ def draft_prompt(*, brief: str, outline: str, snippets: str, feedback: str = "",
 
 要求：
 - frontmatter 先写 title（暂定）、digest（可留空）、author（可留空）。
-- 小节用 `## 01 / 标题`，不要用一级标题。
+- 严格按大纲写：小节的数量、编号、顺序和标题必须与大纲一致，不得增删、合并、调换或重命名小节。小节用 `## 01 / 标题`，不要用一级标题。
 - 事实、数据、引语后带内部锚点；作者判断标 `[观点]`。
 - 原创模式：正文不出现“素材/视频/博主/原作者/本文整理自”；不照搬素材句子。
 - 按系统要求放 `![图注](ww-img:pending "google: …")` 占位符：约每 800–1000 字一张，全文 3–5 张。

@@ -23,6 +23,28 @@ def _bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def parse_models(raw: str, default_provider: str, default_model: str) -> list[dict[str, str]]:
+    """GZH_MODELS：逗号分隔，条目可以是 `model` 或 `provider:model`。"""
+    entries: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for part in str(raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            provider, model = part.split(":", 1)
+            provider, model = provider.strip().lower(), model.strip()
+        else:
+            provider, model = default_provider, part
+        if provider not in PROVIDERS or not model or (provider, model) in seen:
+            continue
+        seen.add((provider, model))
+        entries.append({"provider": provider, "model": model})
+    if not entries:
+        entries.append({"provider": default_provider, "model": default_model})
+    return entries
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
@@ -38,6 +60,7 @@ class Settings:
     anthropic_version: str
     provider: str
     model: str
+    models: list[dict[str, str]]
     author: str
     default_theme: str
     target_chars: int
@@ -100,6 +123,7 @@ def load_settings(data_dir: str | Path | None = None) -> Settings:
         anthropic_version=anthropic_version,
         provider=provider,
         model=model,
+        models=parse_models(os.environ.get("GZH_MODELS", ""), provider, model),
         author=os.environ.get("GZH_AUTHOR", ""),
         default_theme=os.environ.get("GZH_THEME", "wechat"),
         target_chars=int(os.environ.get("GZH_TARGET_CHARS", "2800")),

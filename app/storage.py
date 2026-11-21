@@ -296,7 +296,7 @@ class ProjectStore:
         meta = {
             "version": 2,
             "slug": slug,
-            "title": title or topic or slug,
+            "title": title or topic,
             "topic": topic,
             "goal": goal,
             "audience": audience,
@@ -360,10 +360,12 @@ class ProjectStore:
                 continue
             article = read_text(directory / "article.md", "") or ""
             workflow = project.workflow
+            resolved_title = title_of_markdown(article) or str(project.meta.get("title") or "").strip()
             items.append(
                 {
                     "slug": project.slug,
-                    "title": title_of_markdown(article) or project.meta.get("title") or project.slug,
+                    "title": resolved_title or "未命名文章",
+                    "untitled": not bool(resolved_title),
                     "topic": project.meta.get("topic", ""),
                     "stage": workflow.get("stage") or "materials",
                     "status": workflow.get("status", "idle"),

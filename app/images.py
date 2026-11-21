@@ -206,6 +206,18 @@ def fill_slot(
         return {**list_slots(project), "saved": f"{IMAGES_DIR}/{name}", "bytes": len(image)}
 
 
+def set_caption(project: Project, *, line: int, raw: str, caption: str) -> dict[str, Any]:
+    """只改图注，保留图片地址与搜索关键词。"""
+    caption = re.sub(r"\s+", " ", str(caption or "")).strip()
+    with lock_for(project.dir):
+        path, text = _load_article(project)
+        eol, lines, index = _locate(text, line, raw)
+        match = IMAGE_LINE_RE.match(raw)
+        lines[index] = slot_line(caption, match.group(2), parse_keywords(match.group(3)))
+        _atomic_write(path, eol.join(lines))
+        return list_slots(project)
+
+
 def clear_slot(project: Project, *, line: int, raw: str) -> dict[str, Any]:
     with lock_for(project.dir):
         path, text = _load_article(project)

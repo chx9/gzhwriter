@@ -162,6 +162,92 @@ def test_path_traversal_and_whitelist(client: TestClient) -> None:
     assert response.status_code == 403
 
 
+def test_long_transcript_is_split_into_paragraphs() -> None:
+    from app.materials import text_to_paragraphs
+
+    text = "这是一句字幕。" * 600
+    result = text_to_paragraphs(text)
+    assert len(result["paragraphs"]) > 1
+    assert all(len(paragraph) < 1000 for paragraph in result["paragraphs"])
+    assert "这是一句字幕。" in "".join(result["paragraphs"])
+
+
+def test_outline_cleanup_removes_chat_wrapper() -> None:
+    from app.graph.nodes import _clean_outline, _outline_title
+
+    raw = """已按你的修改意见重排：保留原题。
+
+# 大纲：英伟达真正的风险
+
+## 01 / 跌的是情绪
+从场景切入。
+
+---
+
+八节都写完后，我需要读 A01、A02，等你确认。
+"""
+    cleaned = _clean_outline(raw)
+    assert cleaned.startswith("# 大纲：英伟达真正的风险")
+    assert "已按你的修改意见" not in cleaned
+    assert "等你确认" not in cleaned
+    assert _outline_title(cleaned) == "英伟达真正的风险"
+
+
+def test_create_without_title_then_fill_from_outline(client: TestClient) -> None:
+    created = client.post("/api/projects", json={"targetChars": 1200})
+    assert created.status_code == 200, created.text
+    project = created.json()["project"]
+    assert project["untitled"] is True
+    assert project["title"] == "未命名文章"
+
+    slug = project["slug"]
+    add_text(client, slug)
+    assert client.post(f"/api/projects/{slug}/start", json={}).status_code == 200
+    state = wait_idle(client, slug)
+    assert state["status"] == "interrupted"
+    resume(client, slug, {"action": "approve"})
+    assert wait_idle(client, slug)["status"] == "done"
+
+    loaded = client.app.state.ctx.store.load(slug)
+    assert str(loaded.meta.get("title") or "").strip()
+    listed = next(item for item in client.get("/api/projects").json()["projects"] if item["slug"] == slug)
+    assert listed["untitled"] is False
+    assert listed["title"] != "未命名文章"
+
+
+def test_models_listed_and_selectable(client: TestClient) -> None:
+    health = client.get("/api/health").json()
+    assert health["models"], "GZH_MODELS 至少应回退到 GZH_MODEL 一项"
+    active = next(item for item in health["models"] if item["active"])
+    if not health["demo"]:
+        assert active["model"] == health["model"]
+
+    listed = client.get("/api/models").json()
+    assert listed["active"]["provider"] == active["provider"]
+    assert listed["active"]["model"] == active["model"]
+
+    unknown = client.post("/api/models/active", json={"provider": "anthropic", "model": "no-such-model"})
+    assert unknown.status_code == 400
+    assert unknown.json()["detail"]["code"] == "BAD_MODEL"
+
+
+def test_rename_title_from_writing_page(client: TestClient) -> None:
+    slug = create_project(client)
+    project = client.app.state.ctx.store.load(slug)
+    (project.dir / "article.md").write_text("---\ntitle: 旧标题\ndigest: 摘要\n---\n\n正文。\n", "utf8")
+
+    response = client.patch(f"/api/projects/{slug}/title", json={"title": "新标题"})
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "新标题"
+    assert "title: 新标题" in (project.dir / "article.md").read_text("utf8")
+    listed = client.get("/api/projects").json()["projects"]
+    assert any(item["slug"] == slug and item["title"] == "新标题" for item in listed)
+
+    empty = client.patch(f"/api/projects/{slug}/title", json={"title": "  "})
+    assert empty.status_code == 400
+    assert empty.json()["detail"]["code"] == "MISSING_TITLE"
+
+
 def test_slots_fill_and_clear(client: TestClient) -> None:
     slug = create_project(client)
     article = """---
@@ -193,7 +279,25 @@ digest: 摘要
     assert "images/fig-01.png" in text
     deliverable = client.get(f"/api/projects/{slug}/deliverable").json()
     assert "data:image/png;base64" in deliverable["html"]
-    assert "images/fig-01.png" in deliverable["copyHtml"]
+    assert '<img src="images/fig-01.png"' not in deliverable["copyHtml"]
+    assert "【配图 01 · fig-01.png】" in deliverable["copyHtml"]
+    assert deliverable["copyImages"] == [{"n": 1, "src": "images/fig-01.png", "name": "fig-01.png", "alt": "图注"}]
+    slot2 = client.get(f"/api/projects/{slug}/slots").json()["slots"][0]
+    renamed = client.post(
+        f"/api/projects/{slug}/slots/caption",
+        json={"line": slot2["line"], "raw": slot2["raw"], "caption": "新的图注"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["slots"][0]["caption"] == "新的图注"
+    assert "![新的图注](images/fig-01.png" in (project.dir / "article.md").read_text("utf8")
+    slot2 = client.get(f"/api/projects/{slug}/slots").json()["slots"][0]
+    emptied = client.post(
+        f"/api/projects/{slug}/slots/caption",
+        json={"line": slot2["line"], "raw": slot2["raw"], "caption": ""},
+    )
+    assert emptied.status_code == 200, emptied.text
+    assert emptied.json()["slots"][0]["caption"] == ""
+    assert "![](images/fig-01.png" in (project.dir / "article.md").read_text("utf8")
     slot2 = client.get(f"/api/projects/{slug}/slots").json()["slots"][0]
     cleared = client.post(f"/api/projects/{slug}/slots/clear", json={"line": slot2["line"], "raw": slot2["raw"]})
     assert cleared.status_code == 200
@@ -281,6 +385,39 @@ def test_global_style_reset_restores_defaults(client: TestClient, settings) -> N
     default = (settings.styles_root / "writing-style.md").read_text("utf8")
     assert "# 文笔风格" in default
     assert (settings.styles_root / "sessions" / slug / "writing-style.md").read_text("utf8") == default
+
+
+def test_style_supports_multiple_files(client: TestClient, settings) -> None:
+    slug = create_project(client, "多规则")
+    created = client.post("/api/style/files", json={"title": "标题规则"})
+    assert created.status_code == 200, created.text
+    data = created.json()
+    assert len(data["files"]) == 2
+    new = next(item for item in data["files"] if item["title"] == "标题规则")
+    assert new["filename"] == "rule-01.md"
+    assert new["text"].startswith("# 标题规则")
+    assert (settings.styles_root / "sessions" / slug / "rule-01.md").exists()
+
+    saved = client.put(
+        f"/api/style/files/{new['filename']}",
+        json={"text": "# 标题规则\n\n- 标题不超过 16 字。\n"},
+    )
+    assert saved.status_code == 200, saved.text
+    assert "不超过 16 字" in (settings.styles_root / new["filename"]).read_text("utf8")
+
+    project = client.app.state.ctx.store.load(slug)
+    system = client.app.state.ctx.llm._system(project)
+    assert "# 文笔风格" in system
+    assert "不超过 16 字" in system
+
+    deleted = client.delete(f"/api/style/files/{new['filename']}")
+    assert deleted.status_code == 200
+    assert len(deleted.json()["files"]) == 1
+    assert not (settings.styles_root / "sessions" / slug / "rule-01.md").exists()
+
+    last = client.delete("/api/style/files/writing-style.md")
+    assert last.status_code == 400
+    assert last.json()["detail"]["code"] == "LAST_STYLE"
 
 
 def test_global_style_rejects_empty(client: TestClient) -> None:
@@ -397,66 +534,6 @@ def test_edit_endpoint_previews_then_applies(client: TestClient) -> None:
     article = (project.dir / "article.md").read_text("utf8")
     assert "第二段保留" in article
     assert (project.dir / "dist/article.html").exists()
-
-
-def test_bilibili_material_import(client: TestClient, monkeypatch) -> None:
-    from app.api import routes
-
-    srt = """1
-00:00:01,000 --> 00:00:04,500
-大家好，今天聊聊定期存款怎么分层。
-
-2
-00:00:05,000 --> 00:00:09,000
-先问这笔钱什么时候要用，再决定存多久。
-"""
-    monkeypatch.setattr(
-        routes,
-        "fetch_bilibili_subtitles",
-        lambda url, *, cookies_browser=None, cookie_file=None: {"title": "测试视频标题", "srt": srt},
-    )
-    slug = create_project(client)
-    response = client.post(
-        f"/api/projects/{slug}/materials/bilibili",
-        json={"url": "https://www.bilibili.com/video/BV1xx411c7mD"},
-    )
-    assert response.status_code == 200, response.text
-    result = response.json()["results"][0]
-    assert result["status"] == "imported"
-    assert result["id"] == "S01"  # 字幕 → 口语稿
-    assert result["kind"] == "spoken"
-    sources = client.get(f"/api/projects/{slug}/sources").json()["sources"]
-    assert sources[0]["origin"]["type"] == "url"
-    assert "bilibili.com" in sources[0]["origin"]["url"]
-    # 时间锚点进了 content.md
-    source_dir = sources[0]["dir"]
-    content = client.app.state.ctx.store.load(slug).dir / source_dir / "content.md"
-    assert "[¶1 @00:01]" in content.read_text("utf8")
-
-
-def test_bilibili_bad_url(client: TestClient, monkeypatch) -> None:
-    from app.api import routes
-
-    monkeypatch.setattr(
-        routes,
-        "fetch_bilibili_subtitles",
-        lambda url, *, cookies_browser=None, cookie_file=None: (_ for _ in ()).throw(ApiError("这不是 B 站链接", "BAD_URL")),
-    )
-    slug = create_project(client)
-    response = client.post(f"/api/projects/{slug}/materials/bilibili", json={"url": "https://example.com/x"})
-    assert response.status_code == 400
-    assert response.json()["detail"]["code"] == "BAD_URL"
-
-
-def test_bilibili_srt_conversion() -> None:
-    from app.bilibili import _srt_from_bilibili_json, _srt_time
-
-    assert _srt_time(3661.5) == "01:01:01,500"
-    srt = _srt_from_bilibili_json(
-        {"body": [{"from": 0.0, "to": 2.0, "content": "第一句"}, {"from": 2.5, "to": 4.0, "content": "第二句"}]}
-    )
-    assert "1\n00:00:00,000 --> 00:00:02,000\n第一句" in srt
-    assert "第二句" in srt
 
 
 def test_export_and_import_round_trip(client: TestClient, settings) -> None:

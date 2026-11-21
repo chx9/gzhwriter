@@ -159,13 +159,11 @@ function SourceFolder({
 
 function AddSourceBox({ slug, onDone, onCancel }: { slug: string; onDone: () => Promise<void>; onCancel: () => void }) {
   const { notify } = useToast()
-  const [tab, setTab] = useState<'file' | 'text' | 'url' | 'bili'>('file')
+  const [tab, setTab] = useState<'file' | 'text' | 'url'>('file')
   const [text, setText] = useState('')
   const [title, setTitle] = useState('')
   const [url, setUrl] = useState('')
-  const [biliUrl, setBiliUrl] = useState('')
   const [busy, setBusy] = useState(false)
-  const [busyLabel, setBusyLabel] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const upload = async (files: FileList | null) => {
@@ -202,24 +200,6 @@ function AddSourceBox({ slug, onDone, onCancel }: { slug: string; onDone: () => 
     }
   }
 
-  const addBili = async () => {
-    if (!biliUrl.trim()) return
-    setBusy(true)
-    setBusyLabel('提取字幕中，可能需要十几秒…')
-    try {
-      const result = await api.post<{ results: any[] }>(`/api/projects/${slug}/materials/bilibili`, { url: biliUrl.trim() })
-      const item = result.results[0]
-      if (item?.status === 'error') throw new Error(item.error)
-      notify(`字幕已入库 ${item?.id || ''}（口语稿）`, 'ok')
-      await onDone()
-    } catch (error: any) {
-      notify(error.message, 'error')
-    } finally {
-      setBusy(false)
-      setBusyLabel('')
-    }
-  }
-
   const addUrl = async () => {
     if (!url.trim()) return
     setBusy(true)
@@ -242,7 +222,6 @@ function AddSourceBox({ slug, onDone, onCancel }: { slug: string; onDone: () => 
         <button className={tab === 'file' ? 'active' : ''} onClick={() => setTab('file')}>文件</button>
         <button className={tab === 'text' ? 'active' : ''} onClick={() => setTab('text')}>粘贴</button>
         <button className={tab === 'url' ? 'active' : ''} onClick={() => setTab('url')}>链接</button>
-        <button className={tab === 'bili' ? 'active' : ''} onClick={() => setTab('bili')}>B站</button>
         <button className="seg-cancel" onClick={onCancel}>×</button>
       </div>
       {tab === 'file' ? (
@@ -258,30 +237,13 @@ function AddSourceBox({ slug, onDone, onCancel }: { slug: string; onDone: () => 
             <button className="button button-secondary button-small" onClick={addText} disabled={busy || !text.trim()}>入库</button>
           </div>
         </div>
-      ) : tab === 'url' ? (
+      ) : (
         <div className="source-add-form">
           <input className="input" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…" />
           <div className="source-add-row">
             <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="标题（可选）" />
             <button className="button button-secondary button-small" onClick={addUrl} disabled={busy || !url.trim()}>抓取</button>
           </div>
-        </div>
-      ) : (
-        <div className="source-add-form">
-          <input
-            className="input"
-            value={biliUrl}
-            onChange={(event) => setBiliUrl(event.target.value)}
-            placeholder="https://www.bilibili.com/video/BV… 或 https://b23.tv/…"
-          />
-          <span className="muted small-note">
-            {busy
-              ? busyLabel
-              : '取播放器已有字幕（含 AI 字幕）。需要浏览器里登录过 B 站；读 Chrome Cookie 前先退出 Chrome'}
-          </span>
-          <button className="button button-secondary button-small bili-submit" onClick={addBili} disabled={busy || !biliUrl.trim()}>
-            {busy ? '提取中…' : '取字幕入库'}
-          </button>
         </div>
       )}
     </div>

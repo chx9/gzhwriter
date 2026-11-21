@@ -2,7 +2,16 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { navigate } from '../hooks'
 import type { Deliverable, ProjectSummary, Slot, ThemeInfo } from '../types'
-import { Badge, Empty, Icon, Spinner, formatTime, useToast } from '../ui'
+import { Empty, Icon, useToast } from '../ui'
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('图片解码失败，请到图片目录手动复制'))
+    image.src = src
+  })
+}
 
 export function PublishView({
   slug,
@@ -21,7 +30,9 @@ export function PublishView({
   const [activeTheme, setActiveTheme] = useState(summary.theme || 'wechat')
   const [previewHtml, setPreviewHtml] = useState<{ html: string; title: string; minutes: number; at: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [captionDrafts, setCaptionDrafts] = useState<Record<number, string>>({})
   const inputs = useRef<Record<number, HTMLInputElement | null>>({})
+  const skipCaptionBlur = useRef<number | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -40,6 +51,7 @@ export function PublishView({
     try {
       const slotData = await api.get<{ slots: Slot[] }>(`/api/projects/${slug}/slots`)
       setSlots(slotData.slots)
+      setCaptionDrafts({})
     } catch {
       setSlots([])
     }
@@ -77,7 +89,7 @@ export function PublishView({
       } else {
         await navigator.clipboard.writeText(deliverable.copyHtml)
       }
-      notify('已复制，到公众号编辑器里直接粘贴', 'ok')
+      notify('已复制；图片会显示成【配图 NN】占位文字，粘贴后按编号手动补图', 'ok')
     } catch (error: any) {
       notify(error.message, 'error')
     }
@@ -142,17 +154,66 @@ export function PublishView({
     }
   }
 
+  const saveCaption = async (slot: Slot, value: string) => {
+    const next = value.replace(/\s+/g, ' ').trim()
+    if (next === slot.caption) {
+      setCaptionDrafts((prev) => {
+        const copy = { ...prev }
+        delete copy[slot.n]
+        return copy
+      })
+      return
+    }
+    setBusy(true)
+    try {
+      const data = await api.post<{ slots: Slot[] }>(`/api/projects/${slug}/slots/caption`, {
+        line: slot.line,
+        raw: slot.raw,
+        caption: next,
+      })
+      setSlots(data.slots)
+      setCaptionDrafts((prev) => {
+        const copy = { ...prev }
+        delete copy[slot.n]
+        return copy
+      })
+      await load()
+      notify(next ? '图注已更新，正文已重新排版' : '已清空图注，正文已重新排版', 'ok')
+    } catch (error: any) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copyImage = async (slot: Slot) => {
+    try {
+      if (!navigator.clipboard || !window.ClipboardItem) {
+        throw new Error('当前浏览器不支持复制图片，请到图片目录手动复制')
+      }
+      const data = await api.get<{ dataUrl?: string }>(`/api/projects/${slug}/file?path=${encodeURIComponent(slot.src)}`)
+      if (!data.dataUrl) throw new Error('图片读取失败，请到图片目录手动复制')
+      const image = await loadImage(data.dataUrl)
+      const canvas = document.createElement('canvas')
+      canvas.width = image.naturalWidth
+      canvas.height = image.naturalHeight
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('图片转换失败')
+      context.drawImage(image, 0, 0)
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+      if (!blob) throw new Error('图片转换失败')
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      notify(`已复制 ${slot.src}；到公众号对应【配图】位置粘贴`, 'ok')
+    } catch (error: any) {
+      notify(error.message, 'error')
+    }
+  }
+
   if (missing) {
     return (
       <div className="publish-view">
-        <div className="sources-head">
-          <div>
-            <p className="eyebrow">PUBLISH</p>
-            <h1>发布</h1>
-          </div>
-        </div>
         <div className="panel">
-          <Empty title="还没有排版产物" hint="在「写作」页完成初稿并选定标题后，这里会出现手机预览和发布检查。" />
+          <Empty title="还没有排版产物" hint="在「写作」页完成初稿并选定标题后，这里会出现手机预览、补图和复制。" />
           <div className="center-actions">
             <button className="button button-secondary" onClick={() => navigate(slug, 'write')}>回写作页</button>
           </div>
@@ -161,21 +222,10 @@ export function PublishView({
     )
   }
 
-  const lint = deliverable?.checks?.lint?.summary
-  const source = deliverable?.checks?.sourceCheck?.summary
-  const issues = [...(deliverable?.checks?.lint?.issues || []), ...(deliverable?.checks?.sourceCheck?.issues || [])]
   const pendingSlots = slots.filter((slot) => slot.pending)
 
   return (
     <div className="publish-view">
-      <div className="sources-head">
-        <div>
-          <p className="eyebrow">PUBLISH</p>
-          <h1>发布</h1>
-          <p className="muted">发之前的一切都在这里：预览、补图、检查、换主题、复制。</p>
-        </div>
-        <Badge tone={lint?.errors ? 'error' : 'ok'}>{lint ? (lint.errors ? `${lint.errors} 个 error` : '可交付') : '未检查'}</Badge>
-      </div>
 
       {deliverable?.stale ? (
         <div className="stale-banner">
@@ -208,31 +258,17 @@ export function PublishView({
               <div className="preview-placeholder muted">预览加载中…</div>
             )}
           </div>
-          <p className="muted center">375px 手机预览 · 复制时使用 dist/article.html（图片需到公众号编辑器重新上传）</p>
+          <div className="publish-actions">
+            <button className="button button-primary" onClick={copy}>
+              <Icon name="copy" size={15} /> 复制到公众号
+            </button>
+            <button className="button button-ghost button-small" onClick={rerender} disabled={busy}>
+              <Icon name="refresh" size={15} /> {busy ? '重排中…' : '重新排版'}
+            </button>
+          </div>
         </div>
 
         <div className="publish-side">
-          <section className="side-card">
-            <div className="side-head">
-              <h3>交付状态</h3>
-              <span className="muted">{formatTime(deliverable?.renderedAt)}</span>
-            </div>
-            <dl className="param-list">
-              <div><dt>主题</dt><dd>{deliverable?.theme}</dd></div>
-              <div><dt>正文字数</dt><dd>{deliverable?.chars || lint?.chars || '—'}</dd></div>
-              <div><dt>图片</dt><dd>{deliverable?.images} 张 · {deliverable?.pending} 张待补</dd></div>
-              <div><dt>素材核对</dt><dd>{source ? `${source.errors} error / ${source.warnings} warning` : '—'}</dd></div>
-            </dl>
-            <div className="button-row">
-              <button className="button button-primary button-small" onClick={copy}>
-                <Icon name="copy" size={15} /> 复制到公众号
-              </button>
-              <button className="button button-ghost button-small" onClick={rerender} disabled={busy}>
-                <Icon name="refresh" size={15} /> {busy ? '重排中…' : '重新排版'}
-              </button>
-            </div>
-          </section>
-
           <section className="side-card">
             <div className="side-head">
               <h3>主题</h3>
@@ -267,10 +303,51 @@ export function PublishView({
                   <div key={slot.n} className={`slot-row ${slot.pending ? 'pending' : 'filled'}`}>
                     <span className="slot-number">{String(slot.n).padStart(2, '0')}</span>
                     <div className="slot-info">
-                      <strong>{slot.caption || '无图注'}</strong>
+                      <div className="slot-caption-row">
+                        <input
+                          className="slot-caption"
+                          value={captionDrafts[slot.n] ?? slot.caption}
+                          placeholder="图注（可留空）"
+                          aria-label={`配图 ${slot.n} 的图注`}
+                          onChange={(event) =>
+                            setCaptionDrafts((prev) => ({ ...prev, [slot.n]: event.target.value }))
+                          }
+                          onBlur={(event) => {
+                            if (skipCaptionBlur.current === slot.n) {
+                              skipCaptionBlur.current = null
+                              return
+                            }
+                            saveCaption(slot, event.target.value)
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') event.currentTarget.blur()
+                          }}
+                          disabled={busy}
+                        />
+                        <button
+                          className="slot-caption-clear"
+                          onMouseDown={() => {
+                            skipCaptionBlur.current = slot.n
+                          }}
+                          onClick={() => {
+                            setCaptionDrafts((prev) => {
+                              const copy = { ...prev }
+                              delete copy[slot.n]
+                              return copy
+                            })
+                            saveCaption(slot, '')
+                          }}
+                          disabled={busy || !(captionDrafts[slot.n] ?? slot.caption)}
+                          title="删除图注"
+                          aria-label={`删除配图 ${slot.n} 的图注`}
+                        >
+                          ×
+                        </button>
+                      </div>
                       <small>
-                        line {slot.line}
-                        {slot.pending ? ` · ${slot.keywords.join(' / ')}` : ''}
+                        {slot.pending ? `待补` : slot.src}
+                        {slot.pending && slot.keywords.length ? ` · ${slot.keywords.join(' / ')}` : ''}
+                        {` · line ${slot.line}`}
                       </small>
                     </div>
                     {slot.pending ? (
@@ -286,6 +363,7 @@ export function PublishView({
                       </div>
                     ) : (
                       <div className="slot-row-actions">
+                        <button className="button button-ghost button-small" onClick={() => copyImage(slot)} disabled={busy}>复制图</button>
                         <button className="button button-ghost button-small" onClick={() => inputs.current[slot.n]?.click()}>换图</button>
                         <button className="button button-ghost button-small danger" onClick={() => clear(slot)} disabled={busy}>清除</button>
                       </div>
@@ -307,27 +385,6 @@ export function PublishView({
             )}
           </section>
 
-          {issues.length ? (
-            <section className="side-card">
-              <div className="side-head">
-                <h3>发布检查</h3>
-                <span className="muted">{issues.length} 项</span>
-              </div>
-              <div className="issue-list compact">
-                {issues.map((issue) => (
-                  <div key={`${issue.id}-${issue.line || ''}`} className={`issue issue-${issue.severity}`}>
-                    <Badge tone={issue.severity === 'error' ? 'error' : issue.severity === 'warning' ? 'warn' : 'neutral'}>{issue.severity}</Badge>
-                    <span>{issue.detail}</span>
-                    {issue.line ? (
-                      <button className="issue-goto" onClick={() => navigate(slug, 'write')} title="去写作页修改">
-                        line {issue.line}
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
         </div>
       </div>
     </div>

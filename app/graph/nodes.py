@@ -42,6 +42,29 @@ def _strip_fence(text: str) -> str:
 
 
 
+def _clean_outline(text: str) -> str:
+    """去掉模型在大纲前后加的对话式说明，只保留大纲正文。"""
+    value = _strip_fence(text)
+    lines = value.replace("\r\n", "\n").split("\n")
+    start = next((index for index, line in enumerate(lines) if re.match(r"^#{1,2}\s+\S", line.strip())), 0)
+    lines = lines[start:]
+    if any(line.startswith("## ") for line in lines):
+        last_sep = max((index for index, line in enumerate(lines) if line.strip() == "---"), default=-1)
+        if last_sep >= 0:
+            tail = "\n".join(lines[last_sep + 1 :])
+            if re.search(r"确认|下一步|等你|我再|产出文件|需要你", tail):
+                lines = lines[:last_sep]
+    return "\n".join(lines).strip()
+
+
+def _outline_title(outline: str) -> str:
+    for line in str(outline or "").splitlines():
+        match = re.match(r"^#\s*大纲\s*[：:]\s*(.+?)\s*$", line.strip())
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
 def _extract_article(text: str) -> str:
     """从模型回复里提取真正的 article.md。
 
@@ -183,7 +206,7 @@ class PipelineNodes:
         feedback = state.get("outline_feedback", "")
         self._stage(project, "outline", "running")
         outline = self.llm.outline(project, brief=state.get("brief", ""), feedback=feedback)
-        outline = _strip_fence(outline)
+        outline = _clean_outline(outline)
         write_text(project.dir / "outline.md", outline.rstrip() + "\n")
         return {
             "outline": outline,
@@ -214,9 +237,18 @@ class PipelineNodes:
         feedback = str(resumed.get("feedback") or "").strip()
         if action == "revise" and not feedback:
             action = "approve"
+        project = self._project(state)
+        selected_title = ""
+        if action == "approve" and not str(project.meta.get("title") or "").strip():
+            outline = read_text(project.dir / "outline.md", "") or state.get("outline", "")
+            selected_title = _outline_title(outline)
+            if selected_title:
+                project.meta["title"] = selected_title
+                self.store.save(project)
         return {
             "decision": action,
             "outline_feedback": feedback if action == "revise" else "",
+            "selected_title": selected_title,
             "stage": "outline",
             "updated_at": now_iso(),
         }

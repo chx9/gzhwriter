@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError } from './api'
 import { navigate, useHashRoute, usePolling, useProjectEvents, type AppView } from './hooks'
-import type { AppEvent, Health, ProjectDetail, ProjectSummary, RunnerState, ThemeInfo } from './types'
+import type { AppEvent, Health, ModelOption, ProjectDetail, ProjectSummary, RunnerState, ThemeInfo } from './types'
 import { Badge, Empty, Icon, useToast } from './ui'
 import { WriteView } from './views/WriteView'
 import { PublishView } from './views/PublishView'
@@ -22,9 +22,12 @@ export function App() {
   const [state, setState] = useState<RunnerState | null>(null)
   const [themes, setThemes] = useState<ThemeInfo[]>([])
   const [changing, setChanging] = useState(false)
+  const [createStage, setCreateStage] = useState('')
   const [showNew, setShowNew] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [modelOpen, setModelOpen] = useState(false)
   const importRef = useRef<HTMLInputElement>(null)
+  const modelRef = useRef<HTMLDivElement>(null)
   const bootRedirected = useRef(false)
 
   const slug = route.slug
@@ -88,6 +91,30 @@ export function App() {
 
   usePolling(refreshDetail, 15000, Boolean(slug))
 
+  useEffect(() => {
+    if (!modelOpen) return
+    const close = (event: MouseEvent) => {
+      if (modelRef.current && !modelRef.current.contains(event.target as Node)) setModelOpen(false)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [modelOpen])
+
+  const chooseModel = async (option: ModelOption) => {
+    if (option.active || !option.configured) {
+      setModelOpen(false)
+      return
+    }
+    try {
+      await api.post('/api/models/active', { provider: option.provider, model: option.model })
+      setHealth(await api.get<Health>('/api/health'))
+      setModelOpen(false)
+      notify(`已切换到 ${option.model}`, 'ok')
+    } catch (error: any) {
+      notify(error.message, 'error')
+    }
+  }
+
   const onEvent = useCallback(
     (event: AppEvent) => {
       if ((event.type === 'snapshot' || event.type === 'state' || event.type === 'interrupt' || event.type === 'done') && event.state) {
@@ -105,12 +132,15 @@ export function App() {
   useProjectEvents(slug, onEvent)
 
   const createProject = async (payload: Record<string, any>) => {
+    const startedAt = Date.now()
     const { files, ...fields } = payload
     setChanging(true)
+    setCreateStage('正在创建文章…')
     try {
       const data = await api.post<{ project: ProjectSummary }>('/api/projects', fields)
       const created = data.project
       if (Array.isArray(files) && files.length) {
+        setCreateStage(`正在导入 ${files.length} 份素材…`)
         const form = new FormData()
         for (const file of files) form.append('files', file)
         try {
@@ -119,13 +149,14 @@ export function App() {
           notify(`素材上传失败：${error.message}`, 'error')
         }
       }
+      setCreateStage('正在打开写作页…')
       await refreshProjects()
       setShowNew(false)
       navigate(created.slug, 'write')
-      notify('文章已创建', 'ok')
       // 有素材就直接开写：LLM 自己根据素材写初稿
       const fresh = await api.get<ProjectDetail>(`/api/projects/${created.slug}`)
       if ((fresh.project.sources || []).length > 0) {
+        setCreateStage('正在启动写作…')
         try {
           await api.post(`/api/projects/${created.slug}/start`, {})
         } catch (error: any) {
@@ -133,10 +164,14 @@ export function App() {
         }
       }
       refreshDetail()
+      notify('文章已创建', 'ok')
     } catch (error: any) {
       notify(error.message, 'error')
     } finally {
+      const remain = 700 - (Date.now() - startedAt)
+      if (remain > 0) await new Promise((resolve) => setTimeout(resolve, remain))
       setChanging(false)
+      setCreateStage('')
     }
   }
 
@@ -219,7 +254,39 @@ export function App() {
             演示模式
           </span>
         ) : (
-          <span className="model-pill">{health?.model || '模型已连接'}</span>
+          <div className="model-picker" ref={modelRef}>
+            <button
+              className={`model-pill ${modelOpen ? 'open' : ''}`}
+              onClick={() => setModelOpen((value) => !value)}
+              aria-haspopup="menu"
+              title="切换模型"
+            >
+              {health?.model || '选择模型'} <Icon name="chevron" size={11} />
+            </button>
+            {modelOpen ? (
+              <div className="model-menu" role="menu">
+                {(health?.models || []).map((option) => (
+                  <button
+                    key={`${option.provider}:${option.model}`}
+                    role="menuitem"
+                    className={`model-option ${option.active ? 'active' : ''}`}
+                    onClick={() => chooseModel(option)}
+                    disabled={!option.configured}
+                    title={option.configured ? option.model : '没有配置该提供商的 Key'}
+                  >
+                    <span>{option.model}</span>
+                    <small>
+                      {option.provider}
+                      {option.active ? ' · 当前' : option.configured ? '' : ' · 未配置 Key'}
+                    </small>
+                  </button>
+                ))}
+                {(health?.models || []).length === 0 ? (
+                  <span className="model-empty muted">没有可用模型，检查 GZH_MODELS</span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         )}
 
         {projects.length ? (
@@ -232,9 +299,6 @@ export function App() {
           </select>
         ) : null}
 
-        <button className="icon-button" onClick={() => importRef.current?.click()} disabled={importing} title="导入文章（.zip 或 .md）">
-          {importing ? <span className="spinner" /> : <Icon name="upload" size={17} />}
-        </button>
         <input
           ref={importRef}
           type="file"
@@ -247,15 +311,21 @@ export function App() {
           }}
         />
 
-        <button className="button button-primary button-small" onClick={() => setShowNew(true)}>
-          <Icon name="plus" size={16} /> 新建文章
-        </button>
-
-        {slug && route.view !== 'style' ? (
-          <button className="icon-button" onClick={exportProject} title="导出文章（ZIP）">
-            <Icon name="download" size={17} />
+        <div className="new-article-wrap">
+          <button className="button button-primary button-small" onClick={() => setShowNew(true)} aria-haspopup="menu">
+            <Icon name="plus" size={16} /> 新建文章 <Icon name="chevron" size={12} />
           </button>
-        ) : null}
+          <div className="new-article-menu" role="menu">
+            <button role="menuitem" onClick={() => importRef.current?.click()} disabled={importing}>
+              <Icon name="upload" size={15} />
+              <span>{importing ? '导入中…' : '导入文章'}<small>.zip / .md</small></span>
+            </button>
+            <button role="menuitem" onClick={exportProject} disabled={!slug || route.view === 'style'}>
+              <Icon name="download" size={15} />
+              <span>导出文章<small>当前文章打包为 ZIP</small></span>
+            </button>
+          </div>
+        </div>
 
         {slug && route.view !== 'style' ? (
           <button className="icon-button danger" onClick={deleteProject} title="删除文章">
@@ -289,6 +359,16 @@ export function App() {
       </main>
 
       {showNew ? <NewProjectModal themes={themes} busy={changing} onClose={() => setShowNew(false)} onCreate={createProject} /> : null}
+
+      {changing ? (
+        <div className="create-overlay" role="status" aria-live="polite">
+          <div className="create-overlay-card">
+            <span className="spinner" />
+            <strong>正在创建这篇文章</strong>
+            <span className="muted">{createStage || '请稍候…'}</span>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -398,13 +478,13 @@ function NewProjectModal({
           <button className="icon-button" onClick={onClose} aria-label="关闭">×</button>
         </div>
         <label className="field">
-          <span>想写什么？（标题或选题）</span>
+          <span>想写什么？（标题或选题，可留空）</span>
           <input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            placeholder="例如：低利率下，存款该怎么分层"
+            placeholder="例如：低利率下，存款该怎么分层；留空则由 AI 在确认大纲后起标题"
             autoFocus
-            onKeyDown={(event) => event.key === 'Enter' && title.trim() && submit()}
+            onKeyDown={(event) => event.key === 'Enter' && submit()}
           />
         </label>
         <div
@@ -441,10 +521,10 @@ function NewProjectModal({
             ))}
           </div>
         ) : null}
-        <p className="muted modal-note">创建后 AI 会直接根据素材写出初稿；素材不够也可以先建后加。</p>
+        <p className="muted modal-note">标题可以留空：确认大纲后 AI 会从大纲标题生成一个，正文完成后还会给 5 个候选。创建后 AI 会直接根据素材写出初稿；素材不够也可以先建后加。</p>
         <div className="modal-actions">
           <button className="button button-ghost" onClick={onClose}>取消</button>
-          <button className="button button-primary" disabled={busy || !title.trim()} onClick={submit}>
+          <button className="button button-primary" disabled={busy} onClick={submit}>
             {busy ? '创建中…' : files.length ? '创建并开始写作' : '创建'}
           </button>
         </div>

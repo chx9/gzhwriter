@@ -17,12 +17,11 @@ from .. import __version__
 from ..comments import add_comment, delete_comment, read_comments, update_comment, write_comments
 from ..context import AppContext
 from ..errors import ApiError, Conflict, NotFound
-from ..images import clear_slot, fill_slot, list_slots
-from ..bilibili import fetch_bilibili_subtitles
+from ..images import clear_slot, fill_slot, list_slots, set_caption
 from ..materials import import_materials, read_refs
 from ..render_service import apply_title
 from ..render_service import deliverable as build_deliverable
-from ..render_service import render_project
+from ..render_service import rename_article, render_project
 from ..storage import safe_join
 from ..transfer import build_export, import_upload
 
@@ -75,22 +74,39 @@ def _fetch_url(url: str, *, max_bytes: int = 2 * 1024 * 1024) -> dict[str, Any]:
 @router.get("/health")
 def health(request: Request) -> dict[str, Any]:
     app = ctx(request)
-    base = (
-        app.settings.anthropic_base_url
-        if app.settings.provider == "anthropic"
-        else app.settings.base_url
-    )
+    info = app.llm.health()
     return {
         "ok": True,
         "version": __version__,
-        "demo": app.llm.demo_mode,
-        "provider": app.settings.provider,
-        "model": None if app.llm.demo_mode else app.settings.model,
-        "baseUrl": None if app.llm.demo_mode else base,
+        "demo": info["demo"],
+        "provider": info["provider"],
+        "model": info["model"],
+        "baseUrl": info["baseUrl"],
+        "models": info["models"],
         "dataDir": str(app.settings.data_dir),
         "maxReviewRounds": app.settings.max_review_rounds,
-        "maxTokens": int(os.environ.get("GZH_MAX_TOKENS", "1000000")),
+        "maxTokens": info["maxTokens"],
     }
+
+
+@router.get("/models")
+def list_models(request: Request) -> dict[str, Any]:
+    app = ctx(request)
+    return {
+        "models": app.llm.models(),
+        "active": {"provider": app.llm.provider, "model": app.llm.model},
+        "demo": app.llm.demo_mode,
+    }
+
+
+@router.post("/models/active")
+def choose_model(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    app = ctx(request)
+    active = app.llm.set_active_model(
+        str(payload.get("provider") or ""),
+        str(payload.get("model") or ""),
+    )
+    return {"active": active, "models": app.llm.models(), "health": app.llm.health()}
 
 
 @router.get("/projects")
@@ -101,16 +117,15 @@ def projects(request: Request) -> dict[str, Any]:
 @router.post("/projects")
 def create_project(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     app = ctx(request)
-    title = str(payload.get("title") or payload.get("topic") or "").strip()
-    if not title:
-        raise ApiError("请填写文章标题或选题", "MISSING_TITLE")
+    title = str(payload.get("title") or "").strip()
+    topic = str(payload.get("topic") or "").strip() or title
     theme = str(payload.get("theme") or app.settings.default_theme)
     if not app.themes.read_css(theme):
         theme = app.settings.default_theme
     project = app.store.create(
         title=title,
         slug=payload.get("slug") or None,
-        topic=str(payload.get("topic") or title),
+        topic=topic,
         goal=str(payload.get("goal") or ""),
         audience=str(payload.get("audience") or ""),
         target_chars=int(payload.get("targetChars") or payload.get("target_chars") or app.settings.target_chars),
@@ -218,30 +233,6 @@ def text_material(request: Request, slug: str, payload: dict[str, Any] = Body(..
     if kind:
         item["kind"] = kind
     results = import_materials(app.store, project, [item])
-    return {"results": results, "project": _summary(request, slug), "sources": project.meta.get("sources", [])}
-
-
-@router.post("/projects/{slug}/materials/bilibili")
-async def bilibili_material(request: Request, slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """B 站视频 → 字幕 → 口语稿素材（Sxx，带时间锚点）。"""
-    import os
-
-    app = ctx(request)
-    project = app.store.load(slug)
-    url = str(payload.get("url") or "").strip()
-    if not url:
-        raise ApiError("请填写 B 站视频链接", "BAD_URL")
-    result = await asyncio.to_thread(
-        fetch_bilibili_subtitles,
-        url,
-        cookies_browser=os.environ.get("GZH_BILIBILI_BROWSER") or None,
-        cookie_file=os.environ.get("GZH_BILIBILI_COOKIE_FILE") or None,
-    )
-    results = import_materials(
-        app.store,
-        project,
-        [{"text": result["srt"], "title": result["title"], "kind": "spoken", "origin_url": url}],
-    )
     return {"results": results, "project": _summary(request, slug), "sources": project.meta.get("sources", [])}
 
 
@@ -439,6 +430,25 @@ async def pick_title(request: Request, slug: str, payload: dict[str, Any] = Body
 # ── files / deliverable / checks ────────────────────────────────────
 
 
+@router.patch("/projects/{slug}/title")
+def rename_title(request: Request, slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """写作页直接改标题：只写回标题，不改流水线阶段。"""
+    app = ctx(request)
+    project = app.store.load(slug)
+    if app.runner.is_running(slug):
+        raise Conflict("流水线正在运行，等它停下再改标题", "RUNNING")
+    result = rename_article(
+        project,
+        title=str(payload.get("title") or ""),
+        settings=app.settings,
+        themes=app.themes,
+    )
+    app.store.save(project)
+    if (project.dir / "dist/article.html").exists():
+        result["deliverable"] = build_deliverable(project)
+    return result
+
+
 @router.get("/projects/{slug}/files")
 def files(request: Request, slug: str, scope: str = "project") -> dict[str, Any]:
     app = ctx(request)
@@ -453,10 +463,8 @@ def read_file(request: Request, slug: str, path: str, scope: str = "project", ma
     app = ctx(request)
     project = app.store.load(slug)
     if scope == "styles":
-        if path != "writing-style.md":
-            raise ApiError("只能查看文笔风格文件", "BAD_PATH")
         directory = app.styles.ensure_session(slug)
-        guide = app.styles.read(directory, "writing")
+        guide = app.styles.read(directory, path)
         return {"path": path, "kind": "text", "text": guide["text"], "editable": True, "bytes": len(guide["text"].encode("utf8")), "mtime": 0}
     return app.store.read_file(slug, path, max_bytes=maxBytes or app.settings.max_read_bytes)
 
@@ -470,9 +478,7 @@ def write_file(request: Request, slug: str, payload: dict[str, Any] = Body(...))
     if not isinstance(text, str):
         raise ApiError("text 必须是字符串", "BAD_BODY")
     if payload.get("scope") == "styles":
-        if path != "writing-style.md":
-            raise ApiError("只能编辑文笔风格文件", "BAD_PATH")
-        return app.styles.write(app.styles.ensure_session(slug), "writing", text)
+        return app.styles.write(app.styles.ensure_session(slug), path, text)
     return app.store.write_file(slug, path, text)
 
 
@@ -576,6 +582,24 @@ def clear(request: Request, slug: str, payload: dict[str, Any] = Body(...)) -> d
     return result
 
 
+@router.post("/projects/{slug}/slots/caption")
+def caption(request: Request, slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    app = ctx(request)
+    project = app.store.load(slug)
+    result = set_caption(
+        project,
+        line=int(payload.get("line") or 0),
+        raw=str(payload.get("raw") or ""),
+        caption=str(payload.get("caption") or ""),
+    )
+    try:
+        info, checks = render_project(project, settings=app.settings, themes=app.themes)
+        result["render"] = {"ok": True, "info": info, "checks": checks}
+    except Exception as exc:  # noqa: BLE001
+        result["render"] = {"ok": False, "code": getattr(exc, "code", "RENDER_FAILED"), "message": str(exc)}
+    return result
+
+
 # ── comments ────────────────────────────────────────────────────────
 
 
@@ -640,6 +664,36 @@ def write_global_style(request: Request, payload: dict[str, Any] = Body(...)) ->
         overwrite_custom=bool(payload.get("overwriteCustom", False)),
     )
     return {**_style_payload(app), "result": result}
+
+
+@router.post("/style/files")
+def create_style_file(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """新建一份全局风格文件（一份规则一个文件）。"""
+    app = ctx(request)
+    created = app.styles.create_global(str(payload.get("title") or ""))
+    return {**_style_payload(app), "created": created}
+
+
+@router.put("/style/files/{filename}")
+def write_style_file(request: Request, filename: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    app = ctx(request)
+    text = payload.get("text")
+    if not isinstance(text, str):
+        raise ApiError("text 必须是字符串", "BAD_BODY")
+    result = app.styles.write_global(
+        filename,
+        text,
+        sync=bool(payload.get("sync", True)),
+        overwrite_custom=bool(payload.get("overwriteCustom", False)),
+    )
+    return {**_style_payload(app), "result": result}
+
+
+@router.delete("/style/files/{filename}")
+def delete_style_file(request: Request, filename: str) -> dict[str, Any]:
+    app = ctx(request)
+    app.styles.delete_global(filename)
+    return _style_payload(app)
 
 
 @router.post("/style/sync")

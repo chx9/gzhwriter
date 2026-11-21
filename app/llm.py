@@ -46,10 +46,71 @@ class WriterEngine:
         self.themes = themes
         self.demo = DemoWriter()
         self._client = None
+        self.active_model = dict(settings.models[0])
+        self._load_active_model()
 
     @property
     def demo_mode(self) -> bool:
         return self.settings.demo_mode
+
+    @property
+    def provider(self) -> str:
+        return self.active_model["provider"]
+
+    @property
+    def model(self) -> str:
+        return self.active_model["model"]
+
+    def _model_entry(self, provider: str, model: str) -> dict[str, str] | None:
+        return next(
+            (entry for entry in self.settings.models if entry["provider"] == provider and entry["model"] == model),
+            None,
+        )
+
+    def _provider_configured(self, provider: str) -> bool:
+        return bool(self.settings.anthropic_token if provider == "anthropic" else self.settings.api_key)
+
+    def _active_path(self):
+        return self.settings.data_dir / "active-model.json"
+
+    def _load_active_model(self) -> None:
+        try:
+            data = json.loads(self._active_path().read_text("utf8"))
+        except (OSError, ValueError):
+            return
+        entry = self._model_entry(str(data.get("provider") or ""), str(data.get("model") or ""))
+        if entry:
+            self.active_model = dict(entry)
+
+    def _save_active_model(self) -> None:
+        try:
+            self.settings.data_dir.mkdir(parents=True, exist_ok=True)
+            self._active_path().write_text(json.dumps(self.active_model, ensure_ascii=False), "utf8")
+        except OSError:
+            pass
+
+    def models(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "provider": entry["provider"],
+                "model": entry["model"],
+                "configured": self._provider_configured(entry["provider"]),
+                "active": entry["provider"] == self.provider and entry["model"] == self.model,
+            }
+            for entry in self.settings.models
+        ]
+
+    def set_active_model(self, provider: str, model: str) -> dict[str, str]:
+        entry = self._model_entry(provider, model)
+        if entry is None:
+            raise ApiError("这个模型不在 GZH_MODELS 配置里", "BAD_MODEL")
+        if not self._provider_configured(provider):
+            raise ApiError(f"{provider} 没有配置 Key，不能切换到该模型", "NO_KEY")
+        if entry["provider"] != self.provider:
+            self._client = None
+        self.active_model = dict(entry)
+        self._save_active_model()
+        return dict(self.active_model)
 
     def _client_or_raise(self):
         if self._client is None:
@@ -68,11 +129,11 @@ class WriterEngine:
     def _chat(self, messages: list[dict[str, str]], *, json_mode: bool = False, temperature: float = 0.7) -> str:
         if self.demo_mode:
             raise LLMError("演示模式不应调用真实模型", "DEMO")
-        if self.settings.provider == "anthropic":
+        if self.provider == "anthropic":
             return self._chat_anthropic(messages, temperature=temperature)
         client = self._client_or_raise()
         kwargs: dict[str, Any] = {
-            "model": self.settings.model,
+            "model": self.model,
             "messages": messages,
             "temperature": temperature,
         }
@@ -120,7 +181,7 @@ class WriterEngine:
         for max_tokens in candidates:
             used_tokens = max_tokens
             payload: dict[str, Any] = {
-                "model": self.settings.model,
+                "model": self.model,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "messages": conversation,
@@ -142,7 +203,7 @@ class WriterEngine:
         if response.status_code in (401, 403):
             raise LLMError("Anthropic Token 无效或没有权限：检查 ANTHROPIC_AUTH_TOKEN。", "AUTH")
         if response.status_code == 404:
-            raise LLMError(f"模型名或路径错误：检查 GZH_MODEL（当前 {self.settings.model}）和 ANTHROPIC_BASE_URL。", "MODEL_NOT_FOUND")
+            raise LLMError(f"模型名或路径错误：检查 GZH_MODEL（当前 {self.model}）和 ANTHROPIC_BASE_URL。", "MODEL_NOT_FOUND")
         if response.status_code == 429:
             raise LLMError("模型服务限流或额度不足，稍后再试。", "RATE_LIMIT")
         if response.status_code >= 400:
@@ -174,7 +235,7 @@ class WriterEngine:
         if name in {"APIConnectionError", "ConnectError"}:
             return LLMError(f"连不上模型服务：检查 OPENAI_BASE_URL（当前 {self.settings.base_url}）和网络。", "CONNECTION")
         if name == "NotFoundError":
-            return LLMError(f"模型名或路径错误：检查 GZH_MODEL（当前 {self.settings.model}）和 Base URL。", "MODEL_NOT_FOUND")
+            return LLMError(f"模型名或路径错误：检查 GZH_MODEL（当前 {self.model}）和 Base URL。", "MODEL_NOT_FOUND")
         if name == "RateLimitError":
             return LLMError("模型服务限流或额度不足，稍后再试。", "RATE_LIMIT")
         if name in {"APITimeoutError", "TimeoutError"}:
@@ -185,7 +246,7 @@ class WriterEngine:
 
     def _system(self, project: Project) -> str:
         directory = self.styles.ensure_session(project.slug)
-        writing = self.styles.read(directory, "writing")["text"]
+        writing = self.styles.read_all(directory)
         theme_id = self.themes.effective_id(project.slug)
         theme = self.themes.resolve(theme_id)
         return system_prompt(
@@ -337,10 +398,11 @@ class WriterEngine:
     def health(self) -> dict[str, Any]:
         return {
             "demo": self.demo_mode,
-            "provider": self.settings.provider,
-            "model": None if self.demo_mode else self.settings.model,
+            "provider": self.provider,
+            "model": None if self.demo_mode else self.model,
             "baseUrl": None
             if self.demo_mode
-            else (self.settings.anthropic_base_url if self.settings.provider == "anthropic" else self.settings.base_url),
+            else (self.settings.anthropic_base_url if self.provider == "anthropic" else self.settings.base_url),
+            "models": self.models(),
             "maxTokens": int(os.environ.get("GZH_MAX_TOKENS", "1000000")),
         }

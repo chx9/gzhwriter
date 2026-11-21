@@ -28,6 +28,37 @@ def sha256(text: str) -> str:
 # ── parsing ─────────────────────────────────────────────────────────
 
 
+def _split_long_paragraph(paragraph: str, limit: int = 600) -> list[str]:
+    """字幕转录常常整篇没有空行，会被当成一段；按句子重新切块，让锚点可用。"""
+    if len(paragraph) <= limit * 1.5:
+        return [paragraph]
+    lines = paragraph.split("\n")
+    head = ""
+    if lines and re.match(r"^#{1,6}\s", lines[0]):
+        head, lines = lines[0], lines[1:]
+    parts = re.split(r"(?<=[。！？!?；;])|\n+", "\n".join(lines))
+    chunks: list[str] = []
+    buffer = ""
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        joiner = " " if buffer and re.search(r"[A-Za-z0-9]$", buffer) and re.match(r"^[A-Za-z0-9]", part) else ""
+        if buffer and len(buffer) + len(part) + len(joiner) > limit:
+            chunks.append(buffer)
+            buffer = part
+        else:
+            buffer += joiner + part
+    if buffer:
+        chunks.append(buffer)
+    if head:
+        if chunks:
+            chunks[0] = f"{head}\n{chunks[0]}"
+        else:
+            chunks = [head]
+    return chunks
+
+
 def text_to_paragraphs(text: str) -> dict[str, Any]:
     value = str(text or "").lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
     title = None
@@ -59,7 +90,12 @@ def text_to_paragraphs(text: str) -> dict[str, Any]:
             if re.match(r"^#\s", paragraph):
                 title = re.sub(r"^#\s+", "", paragraph).strip()
                 break
-    return {"title": title, "paragraphs": [p for p in paragraphs if p]}
+    expanded: list[str] = []
+    for paragraph in paragraphs:
+        if not paragraph:
+            continue
+        expanded.extend(_split_long_paragraph(paragraph) if len(paragraph) > 2000 else [paragraph])
+    return {"title": title, "paragraphs": expanded}
 
 
 def decode_entities(text: str) -> str:

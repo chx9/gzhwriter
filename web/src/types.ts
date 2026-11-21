@@ -77,6 +77,7 @@ export interface RunnerState {
 export interface ProjectSummary {
   slug: string
   title: string
+  untitled?: boolean
   topic?: string
   stage: string
   status?: string
@@ -143,16 +144,19 @@ export interface ThemeInfo {
   active?: boolean
 }
 
-export type StyleKind = 'writing'
+export type StyleKind = string
 
 export interface StyleFile {
   kind: StyleKind
   label: string
+  title: string
   filename: string
   exists: boolean
   text: string
   bytes: number
   defaultText: string
+  builtin: boolean
+  changed?: boolean
 }
 
 export interface StyleProject {
@@ -169,6 +173,13 @@ export interface StyleOverview {
   result?: { synced: number; skipped: string[] }
 }
 
+export interface ModelOption {
+  provider: string
+  model: string
+  configured: boolean
+  active: boolean
+}
+
 export interface Health {
   ok: boolean
   version: string
@@ -176,13 +187,22 @@ export interface Health {
   provider?: string
   model: string | null
   baseUrl: string | null
+  models?: ModelOption[]
   dataDir: string
   maxReviewRounds: number
+}
+
+export interface DeliverableImage {
+  n: number
+  src: string
+  name: string
+  alt: string
 }
 
 export interface Deliverable {
   html: string
   copyHtml: string
+  copyImages: DeliverableImage[]
   renderedAt: number
   articleChangedAt: number | null
   stale: boolean
