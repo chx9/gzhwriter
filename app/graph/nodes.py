@@ -1,8 +1,7 @@
-"""流水线节点（v2）。
+"""流水线节点（v3）。
 
-后台一口气跑完 research（简报+消化+大纲）和 draft，只 interrupt 一次：
-初稿完成。用户确认后进 titles，标题由前端内联候选条选择（/title API），
-不再走第二个 interrupt。评审是按需 API，不是图节点。
+后台先跑 research（简报 + 消化）和 outline，只 interrupt 一次：大纲完成。
+用户确认后直接 draft + titles；正文在编辑器里改，不再走确认点。
 """
 
 from __future__ import annotations
@@ -29,7 +28,6 @@ from ..storage import (
     read_text,
     set_frontmatter_value,
     stringify_frontmatter,
-    write_json,
     write_text,
 )
 from ..styles import StyleStore
@@ -103,25 +101,6 @@ class PipelineNodes:
     def _stage(self, project: Project, stage: str, status: str | None = None, **extra: Any) -> None:
         self.store.set_stage(project.slug, stage, status or "running", **extra)
 
-    def _progress(self, project: Project, stage: str, confirmed: str | None = None) -> None:
-        path = project.dir / "progress.md"
-        text = read_text(path, "") or ""
-        if not text:
-            text = f"# 进度：{project.meta.get('title', project.slug)}\n\n## 当前阶段\n\n## 已确认\n- （暂无）\n\n## 待办\n"
-        block = f"## 当前阶段\n{stage}\n"
-        if re.search(r"## 当前阶段\s*\n[\s\S]*?(?=\n## |\Z)", text):
-            text = re.sub(r"## 当前阶段\s*\n[\s\S]*?(?=\n## |\Z)", block, text, count=1)
-        else:
-            text += "\n" + block
-        if confirmed:
-            line = f"- {confirmed}"
-            if line not in text:
-                if "## 已确认" in text:
-                    text = text.replace("## 已确认\n", f"## 已确认\n{line}\n", 1)
-                else:
-                    text += f"\n## 已确认\n{line}\n"
-        write_text(path, text.rstrip() + "\n")
-
     def _normalize_article(self, project: Project, text: str, state: WriterState) -> str:
         value = _extract_article(text)
         title = (
@@ -152,10 +131,8 @@ class PipelineNodes:
             raise ApiError("还没有素材：先在「素材」页上传文件、粘贴文字或贴链接。", "NO_MATERIALS")
         self.styles.ensure_session(project.slug)
         write_index(project)
-        params = self.styles.layout_params(project.slug)
-        theme = self.themes.effective_id(project.slug, params.get("legacyTheme"))
+        theme = self.themes.effective_id(project.slug)
         topic = project.meta.get("topic") or project.meta.get("title") or project.slug
-        self._progress(project, "消化素材、确定大纲，然后撰写初稿")
         self._stage(project, "research", "running")
         return {
             "slug": project.slug,
@@ -169,9 +146,8 @@ class PipelineNodes:
         }
 
     def research(self, state: WriterState) -> dict[str, Any]:
-        """简报 + 消化 + 大纲，一次跑完。产物落盘，但对用户不可见。"""
+        """简报 + 消化，一次跑完。产物落盘，但对用户不可见。"""
         project = self._project(state)
-        feedback = state.get("draft_feedback", "")
         self._stage(project, "research", "running")
 
         brief = self.llm.brief(
@@ -180,12 +156,10 @@ class PipelineNodes:
             goal=state.get("goal", ""),
             audience=state.get("audience", ""),
             target_chars=int(state.get("target_chars") or self.settings.target_chars),
-            feedback=feedback,
         )
         brief = _strip_fence(brief)
         write_text(project.dir / "brief.md", brief.rstrip() + "\n")
 
-        digests: list[str] = []
         for source in project.meta.get("sources", []):
             if source.get("excluded"):
                 continue
@@ -195,66 +169,44 @@ class PipelineNodes:
                 write_text(project.dir / str(source["dir"]) / "clean.md", _strip_fence(cleaned).rstrip() + "\n")
             digest = self.llm.digest(project, source)
             write_text(project.dir / str(source["dir"]) / "digest.md", _strip_fence(digest).rstrip() + "\n")
-            digests.append(_strip_fence(digest))
 
-        compare = self.llm.compare(project, digests)
-        write_text(project.dir / "sources/compare.md", _strip_fence(compare).rstrip() + "\n")
-        consolidated = "# 素材消化\n\n" + "\n\n---\n\n".join(digests) + "\n\n---\n\n" + _strip_fence(compare)
-        write_text(project.dir / "digest.md", consolidated.rstrip() + "\n")
         write_index(project)
-
-        outline = self.llm.outline(project, brief=brief, feedback=feedback)
-        outline = _strip_fence(outline)
-        write_text(project.dir / "outline.md", outline.rstrip() + "\n")
-
-        self._progress(project, "撰写初稿")
         return {
             "brief": brief,
-            "digest": consolidated,
-            "outline": outline,
-            "stage": "draft",
+            "stage": "outline",
             "notice": "",
             "updated_at": now_iso(),
         }
 
-    def draft(self, state: WriterState) -> dict[str, Any]:
+    def outline(self, state: WriterState) -> dict[str, Any]:
         project = self._project(state)
-        feedback = state.get("draft_feedback", "")
-        existing = read_text(project.dir / "article.md", "") or ""
-        self._stage(project, "draft", "running")
-        text = self.llm.draft(
-            project,
-            brief=state.get("brief", ""),
-            outline=state.get("outline", ""),
-            feedback=feedback,
-            existing=existing if feedback else "",
-        )
-        normalized = self._normalize_article(project, text, state)
-        write_text(project.dir / "article.md", normalized.rstrip() + "\n")
-        self._progress(project, "初稿完成，等待过目" if not feedback else "按意见重写完成，等待过目")
+        feedback = state.get("outline_feedback", "")
+        self._stage(project, "outline", "running")
+        outline = self.llm.outline(project, brief=state.get("brief", ""), feedback=feedback)
+        outline = _strip_fence(outline)
+        write_text(project.dir / "outline.md", outline.rstrip() + "\n")
         return {
-            "draft": normalized,
-            "draft_feedback": "",
-            "decision": "",
-            "stage": "draft",
+            "outline": outline,
+            "outline_feedback": "",
+            "stage": "outline",
             "notice": "",
             "updated_at": now_iso(),
         }
 
-    def draft_ready(self, state: WriterState) -> dict[str, Any]:
+    def outline_ready(self, state: WriterState) -> dict[str, Any]:
         payload = {
-            "kind": "draft",
-            "title": "初稿已完成",
-            "content": state.get("draft", ""),
-            "path": "article.md",
+            "kind": "outline",
+            "title": "大纲已生成",
+            "content": state.get("outline", ""),
+            "path": "outline.md",
             "options": {},
             "round": 0,
             "maxRounds": 0,
-            "hint": "直接在左侧改，或选中文字让 AI 改；满意后点「定稿，生成标题」。不满意就写下意见重写。",
+            "hint": "可以直接改 outline.md，或让 AI 改；满意后点「生成文章」。",
             "notice": "",
             "actions": [
-                {"id": "approve", "label": "定稿，生成标题"},
-                {"id": "revise", "label": "按意见重写"},
+                {"id": "approve", "label": "生成文章"},
+                {"id": "revise", "label": "按意见重改大纲"},
             ],
         }
         resumed = interrupt(payload) or {}
@@ -264,8 +216,28 @@ class PipelineNodes:
             action = "approve"
         return {
             "decision": action,
-            "draft_feedback": feedback if action == "revise" else "",
+            "outline_feedback": feedback if action == "revise" else "",
+            "stage": "outline",
+            "updated_at": now_iso(),
+        }
+
+    def draft(self, state: WriterState) -> dict[str, Any]:
+        project = self._project(state)
+        self._stage(project, "draft", "running")
+        # 以磁盘上的 outline.md 为准：用户可能在大纲停点直接改过，或让 AI 改过
+        outline = read_text(project.dir / "outline.md", "") or state.get("outline", "")
+        text = self.llm.draft(
+            project,
+            brief=state.get("brief", ""),
+            outline=outline,
+        )
+        normalized = self._normalize_article(project, text, state)
+        write_text(project.dir / "article.md", normalized.rstrip() + "\n")
+        return {
+            "draft": normalized,
+            "decision": "",
             "stage": "draft",
+            "notice": "",
             "updated_at": now_iso(),
         }
 
@@ -274,10 +246,8 @@ class PipelineNodes:
         article = read_text(project.dir / "article.md", "") or ""
         self._stage(project, "titles", "running")
         options = self.llm.title(project, article=article, brief=state.get("brief", ""))
-        write_json(project.dir / "title-options.json", options)
         titles = [item.get("title", "") for item in options.get("titles", [])]
         recommended = max(1, min(5, int(options.get("recommended") or 1)))
-        self._progress(project, "选择标题与摘要", f"{now_iso()[:10]} 初稿定稿")
         self._stage(project, "awaiting_title", "awaiting_title")
         return {
             "titles": titles,

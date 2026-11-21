@@ -14,43 +14,27 @@ from .render.render import compose_article, local_image_data_url, render_article
 from .render.themes import ThemeLibrary
 from .sourcecheck import check_sources
 from .storage import Project, read_json, read_text, set_frontmatter_value, write_json
-from .styles import StyleStore
 
 
-def resolve_sheet(styles: StyleStore, themes: ThemeLibrary, slug: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
-    """主题 CSS + meta + 渲染参数（accent/label/footer/seal/imageAlign）。"""
-    params = styles.layout_params(slug)
-    theme_id = themes.effective_id(slug, params.get("legacyTheme"))
-    theme = themes.resolve(theme_id, accent=params.get("accent"))
-    css = theme["css"]
-    if params.get("imageAlign") == "center":
-        css += "\n.wx-figure, .wx-caption { text-align: center; } .wx-img { margin: 0 auto; }\n"
-    elif params.get("imageAlign") == "left":
-        css += "\n.wx-figure, .wx-caption { text-align: left; } .wx-img { margin: 0; }\n"
-    meta = {
-        **theme["meta"],
-        **({"label": params["label"]} if params.get("label") else {}),
-        **({"footer": params["footer"]} if params.get("footer") else {}),
-        **({"seal": params["seal"]} if params.get("seal") else {}),
-    }
-    return css, meta, params
+def resolve_sheet(themes: ThemeLibrary, slug: str) -> tuple[str, dict[str, Any]]:
+    """主题 CSS + meta。"""
+    theme = themes.resolve(themes.effective_id(slug))
+    return theme["css"], theme["meta"]
 
 
 def render_project(
     project: Project,
     *,
     settings: Settings,
-    styles: StyleStore,
     themes: ThemeLibrary,
     citation_mode: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    css, meta, params = resolve_sheet(styles, themes, project.slug)
+    css, meta = resolve_sheet(themes, project.slug)
     info = render_article(
         project,
         theme_css=css,
-        theme=themes.effective_id(project.slug, params.get("legacyTheme")),
+        theme=themes.effective_id(project.slug),
         theme_meta=meta,
-        accent=params.get("accent"),
         citation_mode=citation_mode or os.environ.get("GZH_CITATION_MODE", "strip"),
         author=settings.author,
     )
@@ -69,7 +53,6 @@ def render_project(
 def preview_html(
     project: Project,
     *,
-    styles: StyleStore,
     themes: ThemeLibrary,
     settings: Settings,
     text: str | None = None,
@@ -79,14 +62,13 @@ def preview_html(
         text = read_text(project.dir / "article.md", None)
         if text is None:
             raise NotFound("还没有 article.md", "NO_ARTICLE")
-    css, meta, params = resolve_sheet(styles, themes, project.slug)
+    css, meta = resolve_sheet(themes, project.slug)
     result = compose_article(
         project,
         text,
         theme_css=css,
-        theme=themes.effective_id(project.slug, params.get("legacyTheme")),
+        theme=themes.effective_id(project.slug),
         theme_meta=meta,
-        accent=params.get("accent"),
         citation_mode=os.environ.get("GZH_CITATION_MODE", "strip"),
         author=settings.author,
     )
@@ -99,7 +81,6 @@ def apply_title(
     title: str,
     digest: str,
     settings: Settings,
-    styles: StyleStore,
     themes: ThemeLibrary,
 ) -> dict[str, Any]:
     """用户选定标题/摘要：写回 frontmatter、渲染、检查，项目标记完成。"""
@@ -117,7 +98,7 @@ def apply_title(
     if settings.author:
         article = set_frontmatter_value(article, "author", settings.author)
     article_path.write_text(article.rstrip() + "\n", "utf8")
-    info, checks = render_project(project, settings=settings, styles=styles, themes=themes)
+    info, checks = render_project(project, settings=settings, themes=themes)
     return {"info": info, "checks": checks, "article": article}
 
 
@@ -140,7 +121,6 @@ def deliverable(project: Project) -> dict[str, Any]:
     return {
         "html": inlined,
         "copyHtml": raw,
-        "previewUrl": f"/api/projects/{project.slug}/raw/dist/preview.html",
         "renderedAt": rendered_at,
         "articleChangedAt": article_changed,
         "stale": bool(article_changed and article_changed > rendered_at + 1000),

@@ -9,9 +9,9 @@ import { Explorer } from './Explorer'
 
 const NODE_LABELS: Record<string, string> = {
   prepare: '读取素材',
-  research: '消化素材、拟大纲',
+  research: '消化素材',
+  outline: '拟大纲',
   draft: '撰写初稿',
-  draft_ready: '等待过目',
   titles: '生成标题候选',
 }
 
@@ -46,6 +46,8 @@ export function WriteView({
   const [saving, setSaving] = useState(false)
   const [preview, setPreview] = useState<{ html: string; title: string; minutes: number; at: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editElapsed, setEditElapsed] = useState(0)
   const [feedback, setFeedback] = useState('')
   const [instruction, setInstruction] = useState('')
   const [selection, setSelection] = useState('') // 编辑器或预览里的选区
@@ -66,7 +68,12 @@ export function WriteView({
   const [fileContent, setFileContent] = useState<any>(null)
   const [fileLoading, setFileLoading] = useState(false)
   const [fileRaw, setFileRaw] = useState(false)
+  const [fileEditing, setFileEditing] = useState(false)
+  const [fileDraft, setFileDraft] = useState('')
+  const [fileDirty, setFileDirty] = useState(false)
+  const fileSaveTimer = useRef<number>()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const diffRef = useRef<HTMLDivElement | null>(null)
   const gutterRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<HTMLDivElement | null>(null)
   const readerRef = useRef<HTMLDivElement | null>(null)
@@ -97,16 +104,67 @@ export function WriteView({
       })
   }, [slug])
 
-  // 初稿注入
+  // 大纲确认后自动生成正文：阶段前进时把 article.md 拉进来
+  const loadedStage = useRef('')
   useEffect(() => {
-    if (interrupt?.kind === 'draft' && interrupt.content) {
-      setText(interrupt.content)
-      setDirty(false)
-      setProposal(null)
-      refreshPreview(interrupt.content)
+    if (!loaded || openFile) return
+    if (!['draft', 'titles', 'awaiting_title', 'done'].includes(stage)) return
+    if (dirty) return
+    const key = `${slug}:${stage}`
+    if (loadedStage.current === key) return
+    loadedStage.current = key
+    api
+      .get<{ text: string }>(`/api/projects/${slug}/file?path=article.md`)
+      .then((data) => {
+        if (!data.text) return
+        setText(data.text)
+        setDirty(false)
+        refreshPreview(data.text)
+      })
+      .catch(() => {
+        loadedStage.current = ''
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, loaded, openFile, dirty])
+
+  // 停在大纲时自动打开 outline.md，方便直接改。
+  // 先确认 article.md 还不存在，避免旧的/短暂的中断状态把编辑器抢走。
+  useEffect(() => {
+    if (interrupt?.kind !== 'outline' || openFile) return
+    let cancelled = false
+    api
+      .get<{ text: string }>(`/api/projects/${slug}/file?path=article.md`)
+      .catch((error: any) => {
+        if (cancelled || error?.status !== 404) return
+        openEntry({
+          path: 'outline.md',
+          name: 'outline.md',
+          dir: '',
+          bytes: 0,
+          mtime: Date.now(),
+          category: 'draft',
+          kind: 'text',
+          editable: true,
+        })
+      })
+    return () => {
+      cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interrupt?.kind, interrupt?.content])
+  }, [interrupt?.kind])
+
+  // 重拟大纲后，把编辑器里的内容刷新成最新版本
+  useEffect(() => {
+    if (interrupt?.kind !== 'outline' || openFile?.path !== 'outline.md' || fileDirty) return
+    api
+      .get<any>(`/api/projects/${slug}/file?path=outline.md`)
+      .then((data) => {
+        setFileContent(data)
+        setFileDraft(data.text || '')
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interrupt?.content])
 
   // ── 保存 + 实时预览 ───────────────────────────────────────
   const persist = useCallback(
@@ -175,13 +233,23 @@ export function WriteView({
   const resume = async (action: 'approve' | 'revise') => {
     const fb = feedback.trim()
     if (action === 'revise' && !fb) {
-      notify('写一句修改意见，再点「按意见重写」', 'info')
+      notify('写一句修改意见，再点「按意见重改大纲」', 'info')
       return
     }
     setBusy(true)
     try {
+      // 先把还没自动保存的大纲改动写盘；draft 节点以 outline.md 为准
+      if (fileDirty && openFile && openFile.path !== 'article.md') {
+        await saveFileDraft(openFile.path, fileDraft)
+      }
       await api.post(`/api/projects/${slug}/resume`, { action, feedback: fb })
       setFeedback('')
+      if (action === 'approve') {
+        openArticle()
+        setText('')
+        setPreview(null)
+        loadedStage.current = ''
+      }
       onRefresh()
     } catch (error: any) {
       notify(error.message, 'error')
@@ -218,8 +286,11 @@ export function WriteView({
   const targetBlocked = Boolean(openFile && !openFile.editable && !openFile.path.includes('sources/'))
 
   const sendInstruction = async () => {
+    if (editing || busy) return
     if (!instruction.trim()) return
     if (editTarget === 'article.md' && !text.trim()) return
+    setEditing(true)
+    setEditElapsed(0)
     setBusy(true)
     try {
       const data = await api.post<{ before: string; article: string; file: string }>(`/api/projects/${slug}/edit`, {
@@ -238,12 +309,26 @@ export function WriteView({
       setInstruction('')
       setSelection('')
       setAiScoped(false)
+      notify('AI 改稿建议已生成，请在下方确认', 'info')
     } catch (error: any) {
       notify(error.message, 'error')
     } finally {
+      setEditing(false)
       setBusy(false)
     }
   }
+
+  useEffect(() => {
+    if (!editing) return
+    const started = Date.now()
+    const timer = window.setInterval(() => setEditElapsed(Math.floor((Date.now() - started) / 1000)), 1000)
+    return () => window.clearInterval(timer)
+  }, [editing])
+
+  useEffect(() => {
+    if (!proposal) return
+    window.requestAnimationFrame(() => diffRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+  }, [proposal])
 
   const acceptProposal = async () => {
     if (!proposal) return
@@ -277,6 +362,8 @@ export function WriteView({
         } else {
           const data = await api.get<any>(`/api/projects/${slug}/file?path=${encodeURIComponent(target)}`)
           setFileContent(data)
+          setFileDraft(data.text || '')
+          setFileDirty(false)
         }
       } catch (error: any) {
         notify(error.message, 'error')
@@ -302,6 +389,8 @@ export function WriteView({
       })
       .join('\n')
     setBusy(true)
+    setEditing(true)
+    setEditElapsed(0)
     try {
       const data = await api.post<{ before: string; article: string; file: string }>(`/api/projects/${slug}/edit`, {
         instruction: `按下面的批注逐条修改这篇文章，只改批注涉及的地方，保留 frontmatter、溯源标记和图片占位符：\n${body}`,
@@ -317,10 +406,12 @@ export function WriteView({
       })
       setPendingCommentIds(open.map((comment) => comment.id))
       setShowComments(false)
+      notify('AI 改稿建议已生成，请在下方确认', 'info')
     } catch (error: any) {
       notify(error.message, 'error')
     } finally {
       setBusy(false)
+      setEditing(false)
     }
   }
 
@@ -368,20 +459,54 @@ export function WriteView({
     }
   }
 
-  // 打开其他文件（只读标签页）
+  // 打开其他文件（可编辑的文本文件支持直接改）
   const openEntry = async (entry: FileEntry) => {
     setOpenFile(entry)
     setFileRaw(false)
+    setFileEditing(false)
+    setFileDraft('')
+    setFileDirty(false)
     setFileLoading(true)
     try {
       const data = await api.get<any>(`/api/projects/${slug}/file?path=${encodeURIComponent(entry.path)}`)
       setFileContent(data)
+      setFileDraft(data.text || '')
+      // 停在等待确认的大纲时，直接进入编辑模式
+      if (entry.path === 'outline.md' && interrupt?.kind === 'outline') setFileEditing(true)
     } catch (error: any) {
       notify(error.message, 'error')
       setOpenFile(null)
     } finally {
       setFileLoading(false)
     }
+  }
+
+  const saveFileDraft = useCallback(
+    async (path: string, value: string) => {
+      try {
+        await api.put(`/api/projects/${slug}/file`, { path, text: value })
+        setFileDirty(false)
+        setFileContent((current: any) => (current ? { ...current, text: value } : current))
+      } catch (error: any) {
+        notify(error.message, 'error')
+      }
+    },
+    [slug, notify],
+  )
+
+  const toggleFileEditing = () => {
+    if (fileEditing && fileDirty && openFile) saveFileDraft(openFile.path, fileDraft)
+    setFileEditing((value) => !value)
+  }
+
+  const changeFileDraft = (value: string) => {
+    setFileDraft(value)
+    setFileDirty(true)
+    const path = openFile?.path
+    window.clearTimeout(fileSaveTimer.current)
+    fileSaveTimer.current = window.setTimeout(() => {
+      if (path && path !== 'article.md') saveFileDraft(path, value)
+    }, 1000)
   }
 
   const openArticle = () => setOpenFile(null)
@@ -587,10 +712,10 @@ export function WriteView({
         <div className="write-head-actions">
           {dirty ? <Badge tone="warn">未保存</Badge> : saving ? <Badge>保存中…</Badge> : null}
           {running ? <Badge tone="accent">{NODE_LABELS[state?.node || ''] || '运行中'}</Badge> : null}
-          {interrupt?.kind === 'draft' ? <Badge tone="warn">初稿待过目</Badge> : null}
+          {interrupt?.kind === 'outline' ? <Badge tone="warn">大纲待确认</Badge> : null}
           {awaitingTitle ? <Badge tone="accent">待选标题</Badge> : null}
           {done ? <Badge tone="ok">可发布</Badge> : null}
-          {!articleExists && !running ? (
+          {!articleExists && !running && !interrupt ? (
             <button className="button button-primary button-small" onClick={start} disabled={busy || summary.sourceCount === 0}>
               <Icon name="play" size={15} /> 开始写作
             </button>
@@ -606,23 +731,23 @@ export function WriteView({
         </div>
       ) : null}
 
-      {interrupt?.kind === 'draft' ? (
+      {interrupt?.kind === 'outline' ? (
         <div className="draft-banner">
           <div className="draft-banner-text">
-            <strong>初稿已完成</strong>
+            <strong>大纲已生成</strong>
             <span>{interrupt.hint}</span>
           </div>
           <input
             className="input"
             value={feedback}
             onChange={(event) => setFeedback(event.target.value)}
-            placeholder="修改意见（可选）：例如 第 2 节太抽象，开头加个场景…"
+            placeholder="大纲修改意见（可选）：例如 02 节换个角度，开头写得更具体…"
           />
           <button className="button button-primary button-small" onClick={() => resume('approve')} disabled={busy}>
-            定稿，生成标题
+            生成文章
           </button>
           <button className="button button-ghost button-small" onClick={() => resume('revise')} disabled={busy || !feedback.trim()}>
-            按意见重写
+            按意见重改大纲
           </button>
         </div>
       ) : null}
@@ -690,11 +815,18 @@ export function WriteView({
             </div>
             <div className="pane-head-actions">
               {openFile ? (
-                openFile.path.endsWith('.md') ? (
-                  <button className="button button-ghost button-small" onClick={() => setFileRaw((value) => !value)}>
-                    {fileRaw ? '看渲染' : '看源码'}
-                  </button>
-                ) : null
+                <>
+                  {fileDirty ? <Badge tone="warn">未保存</Badge> : null}
+                  {openFile.editable && openFile.kind === 'text' ? (
+                    <button className="button button-ghost button-small" onClick={toggleFileEditing}>
+                      {fileEditing ? '看渲染' : '编辑'}
+                    </button>
+                  ) : openFile.path.endsWith('.md') ? (
+                    <button className="button button-ghost button-small" onClick={() => setFileRaw((value) => !value)}>
+                      {fileRaw ? '看渲染' : '看源码'}
+                    </button>
+                  ) : null}
+                </>
               ) : (
                 <>
                   <div className="view-toggle">
@@ -716,6 +848,15 @@ export function WriteView({
           {openFile ? (
             fileLoading ? (
               <div className="editor-empty"><Spinner label="读取文件" /></div>
+            ) : fileEditing && openFile.editable && openFile.kind === 'text' ? (
+              <div className="file-editor-shell">
+                <textarea
+                  className="code-editor"
+                  value={fileDraft}
+                  onChange={(event) => changeFileDraft(event.target.value)}
+                  spellCheck={false}
+                />
+              </div>
             ) : (
               <FileViewer slug={slug} entry={openFile} content={fileContent} raw={fileRaw} />
             )
@@ -762,14 +903,14 @@ export function WriteView({
           ) : (
             <div className="editor-empty">
               {running ? (
-                <Spinner label="初稿撰写中，写完会停在这里等你过目" />
+                <Spinner label="初稿撰写中，完成后直接出现在编辑器里" />
               ) : (
                 <>
                   <div className="empty-mark">稿</div>
                   <h3>{summary.sourceCount ? '还没有正文' : '先加几份素材'}</h3>
                   <p>
                     {summary.sourceCount
-                      ? '点「开始写作」，AI 会根据素材直接在后台写出初稿。'
+                      ? '点「开始写作」，AI 先拟大纲；你过目后再生成正文。'
                       : '在左侧素材面板拖入文件、粘贴文字或贴链接，然后点「开始写作」。'}
                   </p>
                   {summary.sourceCount ? (
@@ -784,24 +925,29 @@ export function WriteView({
 
           {/* AI 改稿 diff */}
           {proposal ? (
-            <div className="diff-card">
+            <div className="diff-card" ref={diffRef}>
               <div className="diff-head">
                 <strong>AI 修改建议 · {proposal.file.split('/').pop()}</strong>
                 <span className="muted">“{proposal.instruction}”{proposal.selected ? ' · 仅选中部分' : ''}</span>
               </div>
               <div className="diff-body">
-                {proposal.blocks.map((block, index) => (
-                  <div key={index} className={`diff-block diff-${block.type}`}>
-                    {block.type === 'removed' ? <em>删</em> : block.type === 'added' ? <em>增</em> : null}
-                    <span>{block.text}</span>
-                  </div>
-                ))}
+                {proposal.blocks.length === 0 ? (
+                  <p className="muted">模型返回的内容和原文一致，没有可接受的变化。</p>
+                ) : (
+                  proposal.blocks.map((block, index) => (
+                    <div key={index} className={`diff-block diff-${block.type}`}>
+                      {block.type === 'removed' ? <em>删</em> : block.type === 'added' ? <em>增</em> : null}
+                      <span>{block.text}</span>
+                    </div>
+                  ))
+                )}
               </div>
               <div className="diff-actions">
-                <button className="button button-primary button-small" onClick={acceptProposal}>
+                <button className="button button-primary button-small" onClick={acceptProposal} disabled={!proposal.blocks.length}>
                   <Icon name="check" size={14} /> 接受改动
                 </button>
                 <button className="button button-ghost button-small" onClick={() => { setProposal(null); setPendingCommentIds([]) }}>放弃</button>
+                <span className="muted diff-note">改动尚未写入；接受后才保存</span>
               </div>
             </div>
           ) : null}
@@ -902,43 +1048,54 @@ export function WriteView({
             <button onClick={() => { setSelection(''); setAiScoped(false) }}>×</button>
           </div>
         ) : null}
+        {editing ? (
+          <div className="chatbox-progress">
+            <span className="spinner" />
+            <span>AI 正在改稿… {editElapsed}s</span>
+            <em>模型在整篇重写，通常需要 10–60 秒；期间请不要刷新页面</em>
+          </div>
+        ) : null}
         <div className="chatbox">
           <Icon name="spark" size={17} />
           <input
             ref={chatInputRef}
             value={instruction}
             onChange={(event) => setInstruction(event.target.value)}
-            onKeyDown={(event) => event.key === 'Enter' && sendInstruction()}
+            onKeyDown={(event) => event.key === 'Enter' && !editing && sendInstruction()}
             placeholder={
-              targetBlocked
-                ? `${openFile?.path.split('/').pop()} 是只读产物`
-                : selection
-                  ? '对正文中选中的这段提要求……'
-                  : openFile
-                    ? openFile.editable
-                      ? `对 ${openFile.path.split('/').pop()} 提要求`
-                      : `为这份素材写 digest（保存到 ${editTarget.split('/').pop()}）`
-                    : '对这篇文章提要求：例如 把结尾改得更有力一点'
+              editing
+                ? 'AI 正在改稿…'
+                : targetBlocked
+                  ? `${openFile?.path.split('/').pop()} 是只读产物`
+                  : selection
+                    ? '对正文中选中的这段提要求……'
+                    : openFile
+                      ? openFile.editable
+                        ? `对 ${openFile.path.split('/').pop()} 提要求`
+                        : `为这份素材写 digest（保存到 ${editTarget.split('/').pop()}）`
+                      : '对这篇文章提要求：例如 把结尾改得更有力一点'
             }
-            disabled={targetBlocked || (editTarget === 'article.md' && !articleExists) || running}
+            disabled={editing || targetBlocked || (editTarget === 'article.md' && !articleExists) || running}
           />
           <button
             className="chatbox-send"
             onClick={sendInstruction}
-            disabled={targetBlocked || busy || !instruction.trim() || (editTarget === 'article.md' && !articleExists)}
+            disabled={editing || targetBlocked || busy || !instruction.trim() || (editTarget === 'article.md' && !articleExists)}
             title="发送"
           >
-            <Icon name="arrow" size={16} />
+            {editing ? <span className="spinner spinner-light" /> : <Icon name="arrow" size={16} />}
           </button>
         </div>
         <p className="chatbox-hint">
-          {targetBlocked
-            ? '这个文件不可修改'
-            : openFile
-              ? openFile.editable
-                ? `修改会写回 ${editTarget}`
-                : `原件只读，AI 结果保存到 ${editTarget}`
-              : 'Enter 发送 · 在正文里选中文字，可限定只改那一部分'}
+          {editing
+            ? '改稿结果会以 diff 呈现，接受后才写入'
+            : targetBlocked
+              ? '这个文件不可修改'
+              : openFile
+                ? openFile.editable
+                  ? `修改会写回 ${editTarget}`
+                  : `原件只读，AI 结果保存到 ${editTarget}`
+                : 'Enter 发送 · 在正文里选中文字，可限定只改那一部分'}
         </p>
       </div>
 

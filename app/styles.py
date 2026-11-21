@@ -1,40 +1,17 @@
-"""文笔风格与排版补充说明：全局模板 + 每个项目一份副本。"""
+"""文笔风格：全局模板 + 每个项目一份副本。"""
 
 from __future__ import annotations
 
-import re
 import shutil
 from pathlib import Path
 from typing import Any
 
 from .errors import ApiError, NotFound
-from .storage import parse_frontmatter, read_text, write_text
+from .storage import write_text
 
-STYLE_FILES = {"layout": "layout-style.md", "writing": "writing-style.md"}
-STYLE_LABELS = {"layout": "排版补充说明", "writing": "文笔风格"}
+STYLE_FILES = {"writing": "writing-style.md"}
+STYLE_LABELS = {"writing": "文笔风格"}
 STYLE_MAX_CHARS = 12000
-
-DEFAULT_LAYOUT_STYLE = """---
-# 排版补充说明：真正的版面由「排版主题」（themes/<id>.css）决定，这里只写主题之外想追加的纪律。
-# 这几项是可选的机器参数，改动下次排版生效：
-#   accent     覆盖主题的强调色（#rrggbb）
-#   label      文章顶部栏目标签的默认值
-#   footer     文末品牌卡片文案，「标题|副标题」（none 表示不显示）
-# theme 只作兜底（换主题用「风格」页点选，或 API POST /theme）
-theme: wechat
-imageAlign: center
----
-
-# 排版补充
-
-> 主题负责「长什么样」，这份文件负责「还要注意什么」。可以直接改，也可以让 AI 改。
-
-## 还要注意
-
-- 每一节只讲一件事，手机上每段 2–4 行。
-- 强调服务于判断和数字：粗体每 2–3 段一处，同一处只用一种强调。
-- 全文 2–4 张图，图注写清图里是什么，不写「仅供参考」。
-"""
 
 DEFAULT_WRITING_STYLE = """# 文笔风格
 
@@ -90,7 +67,7 @@ DEFAULT_WRITING_STYLE = """# 文笔风格
 - 回到开头的问题，给读者一个可以带走的判断或视角。
 - 不喊口号，不写“你怎么看？欢迎留言”“点个在看”。"""
 
-DEFAULTS = {"layout": DEFAULT_LAYOUT_STYLE, "writing": DEFAULT_WRITING_STYLE}
+DEFAULTS = {"writing": DEFAULT_WRITING_STYLE}
 
 
 def _style_path(directory: Path, kind: str) -> Path:
@@ -182,23 +159,112 @@ class StyleStore:
         write_text(target, source.read_text("utf8"))
         return self.list_session(slug)
 
-    def layout_params(self, slug: str) -> dict[str, Any]:
-        directory = self.ensure_session(slug)
-        guide = self.read(directory, "layout")
-        if not guide["exists"]:
-            return {}
-        meta, _ = parse_frontmatter(guide["text"])
-        out: dict[str, Any] = {}
-        if meta.get("theme"):
-            out["legacyTheme"] = meta["theme"]
-        if meta.get("accent") and re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", meta["accent"]):
-            out["accent"] = meta["accent"]
-        if meta.get("imageAlign") in {"center", "left"}:
-            out["imageAlign"] = meta["imageAlign"]
-        for key in ("label", "footer", "seal"):
-            if meta.get(key):
-                out[key] = meta[key]
-        return out
+    # ── 全局风格：所有文章共用一份 ─────────────────────────────
+
+    def list_global(self) -> dict[str, Any]:
+        files = []
+        for kind, filename in STYLE_FILES.items():
+            data = self.read(self.root, kind)
+            files.append(
+                {
+                    "kind": kind,
+                    "label": STYLE_LABELS[kind],
+                    "filename": filename,
+                    "exists": data["exists"],
+                    "text": data["text"],
+                    "bytes": len(data["text"].encode("utf8")),
+                    "defaultText": DEFAULTS[kind],
+                }
+            )
+        return {"files": files, "root": str(self.root), "maxChars": STYLE_MAX_CHARS}
+
+    def _session_dirs(self) -> list[Path]:
+        directory = self.root / "sessions"
+        if not directory.is_dir():
+            return []
+        return sorted(
+            (path for path in directory.iterdir() if path.is_dir() and not path.name.startswith(".")),
+            key=lambda path: path.name,
+        )
+
+    def changed_ids(self, slug: str) -> list[str]:
+        """哪些风格文件被这篇文章单独改过（与全局不一致）。"""
+        directory = self.session_dir(slug)
+        changed = []
+        for kind in STYLE_FILES:
+            local = _style_path(directory, kind)
+            global_file = _style_path(self.root, kind)
+            if local.exists() and global_file.exists() and local.read_text("utf8") != global_file.read_text("utf8"):
+                changed.append(kind)
+        return changed
+
+    def sessions(self) -> list[dict[str, Any]]:
+        return [{"slug": directory.name, "changed": self.changed_ids(directory.name)} for directory in self._session_dirs()]
+
+    @staticmethod
+    def _validate(kind: str, text: Any) -> str:
+        if kind not in STYLE_FILES:
+            raise ApiError(f"未知风格文件：{kind}", "BAD_STYLE")
+        if not isinstance(text, str) or not text.strip():
+            raise ApiError("风格内容不能为空", "BAD_STYLE")
+        if len(text) > STYLE_MAX_CHARS:
+            raise ApiError(f"风格文件不能超过 {STYLE_MAX_CHARS} 字符", "BAD_STYLE")
+        return text if text.endswith("\n") else text + "\n"
+
+    def write_global(
+        self,
+        kind: str,
+        text: str,
+        *,
+        sync: bool = True,
+        overwrite_custom: bool = False,
+    ) -> dict[str, Any]:
+        """写全局风格；默认同步到所有「跟随全局」的文章，单独改过的保留。"""
+        value = self._validate(kind, text)
+        target = _style_path(self.root, kind)
+        previous = target.read_text("utf8") if target.exists() else None
+        write_text(target, value)
+        synced = 0
+        skipped: list[str] = []
+        if sync:
+            for directory in self._session_dirs():
+                copy = _style_path(directory, kind)
+                current = copy.read_text("utf8") if copy.exists() else None
+                if not overwrite_custom and previous is not None and current is not None and current != previous:
+                    skipped.append(directory.name)
+                    continue
+                write_text(copy, value)
+                synced += 1
+        return {"synced": synced, "skipped": skipped}
+
+    def sync(
+        self,
+        kind: str,
+        *,
+        slug: str | None = None,
+        overwrite_custom: bool = True,
+    ) -> dict[str, Any]:
+        """把全局风格覆盖到文章副本；slug 为空时覆盖全部。"""
+        if kind not in STYLE_FILES:
+            raise ApiError(f"未知风格文件：{kind}", "BAD_STYLE")
+        source = _style_path(self.root, kind)
+        if not source.exists():
+            write_text(source, DEFAULTS[kind])
+        value = source.read_text("utf8")
+        targets = [self.session_dir(slug)] if slug else self._session_dirs()
+        synced = 0
+        skipped: list[str] = []
+        for directory in targets:
+            copy = _style_path(directory, kind)
+            if not overwrite_custom and copy.exists() and copy.read_text("utf8") != value:
+                skipped.append(directory.name)
+                continue
+            write_text(copy, value)
+            synced += 1
+        return {"synced": synced, "skipped": skipped}
+
+    def reset_global(self, kind: str, *, sync: bool = True) -> dict[str, Any]:
+        return self.write_global(kind, DEFAULTS.get(kind, ""), sync=sync, overwrite_custom=True)
 
     def changed_kinds(self, slug: str) -> list[str]:
         directory = self.ensure_session(slug)

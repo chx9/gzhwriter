@@ -1,4 +1,4 @@
-"""LangGraph 状态字段（v2：文档为中心，只停一次）。"""
+"""LangGraph 状态字段（v3：大纲停一次）。"""
 
 from __future__ import annotations
 
@@ -14,11 +14,10 @@ class WriterState(TypedDict, total=False):
     theme: str
 
     brief: str
-    digest: str
     outline: str
     draft: str
 
-    draft_feedback: str
+    outline_feedback: str
 
     decision: str  # "approve" | "revise"
     titles: list[str]

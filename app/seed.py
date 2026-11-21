@@ -76,14 +76,9 @@ def seed_sample(settings: Settings, store: ProjectStore, styles: StyleStore, the
         target_chars=project.meta["targetChars"],
     )
     write_text(project.dir / "brief.md", brief + "\n")
-    digests = []
     for source in project.meta.get("sources", []):
         digest = demo.digest(project, source)
         write_text(project.dir / str(source["dir"]) / "digest.md", digest + "\n")
-        digests.append(digest)
-    compare = demo.compare(project)
-    write_text(project.dir / "sources/compare.md", compare + "\n")
-    write_text(project.dir / "digest.md", ("# 素材消化\n\n" + "\n\n---\n\n".join(digests) + "\n\n---\n\n" + compare) + "\n")
     outline = demo.outline(project, brief=brief)
     write_text(project.dir / "outline.md", outline + "\n")
     article = demo.draft(project, brief=brief, outline=outline)
@@ -93,28 +88,10 @@ def seed_sample(settings: Settings, store: ProjectStore, styles: StyleStore, the
     article = set_frontmatter_value(article, "title", title)
     article = set_frontmatter_value(article, "digest", options.get("digest", ""))
     write_text(project.dir / "article.md", article + "\n")
-    review = demo.review(project, article=article)
-    write_text(project.dir / "reviews.md", review + "\n")
-    write_text(
-        project.dir / "progress.md",
-        f"""# 进度：{project.meta['title']}
-
-## 当前阶段
-示例项目：已完成排版，可直接看「发布」页
-
-## 已确认
-- 示例数据：brief / 大纲 / 正文 / 评审 / 标题均为离线演示引擎生成
-- 标题：{title}
-
-## 待办
-- [ ] 补两张配图后重新排版
-- [ ] 复制到公众号预览
-""",
-    )
-    project.meta["workflow"] = {"stage": "done", "status": "done", "reviewRound": 1}
+    project.meta["workflow"] = {"stage": "done", "status": "done"}
     store.save(project)
     try:
-        render_project(project, settings=settings, styles=styles, themes=themes)
+        render_project(project, settings=settings, themes=themes)
     except Exception:
         pass
     return project.slug

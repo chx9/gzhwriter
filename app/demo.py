@@ -9,7 +9,7 @@ import re
 from typing import Any
 
 from .materials import load_content
-from .storage import Project, char_count, parse_frontmatter, truncate
+from .storage import Project, char_count, truncate
 
 
 def _sources(project: Project) -> list[dict[str, Any]]:
@@ -94,61 +94,23 @@ class DemoWriter:
 ## 适合用在哪里
 - 适合作为背景、事实依据和开头场景；不直接引用素材作者的说法。"""
 
-    def compare(self, project: Project) -> str:
-        sources = _sources(project)
-        consensus = "\n".join(f"- {source.get('id')} 支持“先看条件，再下结论”的判断。" for source in sources) or "- （暂无）"
-        conflicts = "\n".join(f"- {source.get('id')} 的口径与其它素材可能不同；正文只保留能相互印证的数字。" for source in sources[:2]) or "- （暂无）"
-        gaps = "- 具体案例、最新数据和反方证据可能不足；写作时标 `[观点]` 或保持定性。"
-        return f"""# 素材对比
-
-## 共识
-{consensus}
-
-## 冲突
-{conflicts}
-
-## 空白
-{gaps}
-
-## 主素材建议
-- {sources[0].get('id') if sources else '（暂无）'} 信息量最大，作为主线；其余素材补充事实与场景。"""
-
     def outline(self, project: Project, *, brief: str, feedback: str = "") -> str:
         title = project.meta.get("title") or "这篇选题"
         anchors = [_anchor(project, index) for index in range(4)]
         return f"""# 大纲：{truncate(title, 30)}
 
-- 角度：反常识型。先打破一个默认假设，再解释条件如何变化，最后给出可执行的分层判断。
-- 目标读者 / 篇幅：与 brief 一致；约 {project.meta.get('targetChars') or 2800} 字
-- 开头钩子：用一个具体场景或一组反差数字开场，前三行让读者想知道“为什么”。
+## 01 / 默认答案依赖什么
+先写大家习惯的做法，再指出它背后依赖的前提条件。用一个素材里的数字或事实做对照。{anchors[0]}
 
-## 01 那个默认假设还成立吗（约 600 字）
-- 要点：先描述大家习惯的做法，再指出它依赖的前提。{anchors[0]}
-- 要点：用素材里的一个事实或数字做对照。{anchors[1]}
-- 配图：场景照片或对比图 —— google: topic comparison chart | 主题 对比 图表
+## 02 / 条件变了，判断也要变
+说明变化来自哪里：收益、选择成本、时间跨度。先讲事实，再给判断，不把推测写成定论。{anchors[1]}
 
-## 02 条件变了，判断也要变（约 700 字）
-- 要点：解释变化来自哪里，不把推测写成定论。{anchors[2]}
-- 金句候选：真正要问的不是“哪个更好”，而是“这笔钱什么时候要用”。{anchors[0]}
-- 配图：结构示意图 —— google: decision framework diagram | 决策 框架 示意图
+## 03 / 按用途把选择拆开
+按时间、用途和风险承受能力分层，每一层给一个判断标准。用表格呈现可比较的数字。{anchors[2]}
 
-## 03 把选择拆成三层（约 800 字）
-- 要点：按时间、用途和风险承受能力分层；每一层给一个判断标准。{anchors[3]}
-- 要点：用表格呈现可比较的数字；数字必须能溯源。{anchors[0]}
-- 配图：分层示意图 —— google: three layer allocation diagram | 三层 配置 示意图
-
-## 04 哪些情况仍然适合原来的做法（约 600 字）
-- 要点：承认边界，避免把结论说成绝对。{anchors[1]}
-- 收尾：回到开头的问题，给一个可以带走的判断。[观点]
-
-## 未用到的素材
-- 与主线重复的段落不单独展开。
-
-## 冲突及处理
-- 口径不一致的数据只用“约”，并在正文说明口径。
-
-## 空白
-- 缺少最新案例的部分写成作者判断，标 `[观点]`。"""
+## 04 / 什么情况下仍然适合原来的做法
+承认边界，避免把结论说成绝对。最后回到开头的问题，给一个可以带走的判断。{anchors[3]}
+"""
 
     def draft(self, project: Project, *, brief: str, outline: str, feedback: str = "", existing: str = "") -> str:
         title = project.meta.get("title") or "这篇选题"
@@ -209,32 +171,6 @@ author:
 
 > 好的判断不是记住更多结论，而是知道每个结论在什么条件下成立。[观点]
 """
-
-    def review(self, project: Project, *, article: str) -> str:
-        _, body = parse_frontmatter(article)
-        paragraphs = [re.sub(r"\s+", " ", p).strip() for p in re.split(r"\n{2,}", body) if p.strip()]
-        quotes = [truncate(p, 50) for p in paragraphs if not p.startswith("#") and not p.startswith("![") and len(p) > 20][:8]
-        while len(quotes) < 6:
-            quotes.append("（演示模式：这一段需要人工复核）")
-        rows = [
-            ("必改", "事实编辑", quotes[0], "演示模式：请核对这一句的事实与锚点是否对应", "补出处或改成定性表述"),
-            ("必改", "原创审查", quotes[1], "演示模式：检查是否有照搬素材的句式", "用自己的话重写"),
-            ("建议", "目标读者", quotes[2], "演示模式：这一段可能偏抽象，读者容易跳过", "加一个具体场景"),
-            ("建议", "结构编辑", quotes[3], "演示模式：节与节之间的过渡可以更明确", "补一句过渡"),
-            ("可选", "文字编辑", quotes[4], "演示模式：句子偏长，可以拆短", "拆成两句"),
-            ("可选", "配图审查", quotes[5], "演示模式：图位位置可以再靠近论述", "移动到段落之后"),
-        ]
-        table = "\n".join(
-            f"| R1-{index + 1:02d} | {level} | {role} | {quote} | {problem} | | | {suggestion} |"
-            for index, (level, role, quote, problem, suggestion) in enumerate(rows)
-        )
-        return f"""# 评审记录
-
-演示模式：2 条必改、2 条建议、2 条可选。真实模型会按事实、读者、结构、文字、合规、原创、配图、风格八个角色分别评审。
-
-| 编号 | 级别 | 角色 | 原句 | 问题 / 建议 | 裁决 | 说明 | 改动 |
-|---|---|---|---|---|---|---|---|
-{table}"""
 
     def title(self, project: Project, *, article: str, brief: str) -> dict[str, Any]:
         topic = project.meta.get("topic") or project.meta.get("title") or "这个话题"

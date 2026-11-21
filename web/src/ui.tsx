@@ -63,6 +63,8 @@ type IconName =
   | 'clock'
   | 'external'
   | 'chevron'
+  | 'upload'
+  | 'download'
 
 const paths: Record<IconName, React.ReactNode> = {
   play: <path d="M8 5v14l11-7z" />,
@@ -79,6 +81,8 @@ const paths: Record<IconName, React.ReactNode> = {
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   external: <><path d="M14 4h6v6M20 4l-9 9" /><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5" /></>,
   chevron: <path d="m9 6 6 6-6 6" />,
+  upload: <><path d="M12 21V9M7 14l5-5 5 5" /><path d="M4 3h16" /></>,
+  download: <><path d="M12 3v12M7 10l5 5 5-5" /><path d="M4 21h16" /></>,
 }
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

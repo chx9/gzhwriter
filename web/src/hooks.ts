@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppEvent } from './types'
 
-export type AppView = 'write' | 'publish'
+export type AppView = 'write' | 'publish' | 'style'
 
 export interface Route {
   slug?: string
@@ -13,11 +13,13 @@ const VIEW_ALIASES: Record<string, AppView> = {
   compose: 'write',
   publish: 'publish',
   materials: 'publish',
+  style: 'style',
 }
 
 export function parseHash(): Route {
   const hash = window.location.hash.replace(/^#\/?/, '')
   const parts = hash.split('/').filter(Boolean)
+  if (parts[0] === 'style') return { view: 'style' }
   if (parts[0] !== 'p' || !parts[1]) return { view: 'home' }
   const slug = parts[1]
   const view = VIEW_ALIASES[parts[2] || 'write'] || 'write'
@@ -25,7 +27,8 @@ export function parseHash(): Route {
 }
 
 export function navigate(slug: string | undefined, view: AppView = 'write') {
-  const hash = slug ? `#/p/${slug}/${view}` : '#/'
+  const hash =
+    view === 'style' ? (slug ? `#/p/${slug}/style` : '#/style') : slug ? `#/p/${slug}/${view}` : '#/'
   if (window.location.hash !== hash) window.location.hash = hash
 }
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import io
 import time
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,17 +20,19 @@ PNG = base64.b64decode(
 
 
 def test_full_demo_pipeline_single_pause(client: TestClient) -> None:
-    """v2：后台一口气跑完 research+draft，只停一次（初稿）。"""
+    """v3：后台跑完 research+outline，停一次；确认后直接出正文和标题。"""
     slug = create_project(client)
     add_text(client, slug)
     response = client.post(f"/api/projects/{slug}/start", json={})
     assert response.status_code == 200
 
     state = wait_idle(client, slug)
-    assert state["status"] == "interrupted" and state["interrupt"]["kind"] == "draft"
-    # 内部产物落盘但不对用户展示
-    for internal in ("brief.md", "outline.md", "digest.md"):
-        assert (client.app.state.ctx.store.load(slug).dir / internal).exists()
+    assert state["status"] == "interrupted" and state["interrupt"]["kind"] == "outline"
+    project_dir = client.app.state.ctx.store.load(slug).dir
+    # 内部产物落盘但不对用户展示；正文还没开始写
+    for internal in ("brief.md", "outline.md"):
+        assert (project_dir / internal).exists()
+    assert not (project_dir / "article.md").exists()
 
     resume(client, slug, {"action": "approve"})
 
@@ -63,7 +67,7 @@ def test_full_demo_pipeline_single_pause(client: TestClient) -> None:
     assert state["stage"] == "done"
 
 
-def test_revise_loops_back_to_draft(client: TestClient) -> None:
+def test_revise_loops_back_to_outline(client: TestClient) -> None:
     slug = create_project(client)
     add_text(client, slug)
     client.post(f"/api/projects/{slug}/start", json={})
@@ -71,24 +75,11 @@ def test_revise_loops_back_to_draft(client: TestClient) -> None:
     resume(client, slug, {"action": "revise", "feedback": "开头再具体一点"})
     state = wait_idle(client, slug)
     assert state["status"] == "interrupted"
-    assert state["interrupt"]["kind"] == "draft"
-    assert state["values"]["draft_feedback"] == ""
+    assert state["interrupt"]["kind"] == "outline"
+    assert state["values"]["outline_feedback"] == ""
     resume(client, slug, {"action": "approve"})
     state = wait_idle(client, slug)
     assert state["stage"] == "awaiting_title"
-
-
-def test_review_is_on_demand_api(client: TestClient) -> None:
-    slug = create_project(client)
-    add_text(client, slug)
-    project = client.app.state.ctx.store.load(slug)
-    (project.dir / "article.md").write_text(
-        "---\ntitle: 测试\ndigest: 摘要\n---\n\n正文。[A01¶1]\n", "utf8"
-    )
-    response = client.post(f"/api/projects/{slug}/review")
-    assert response.status_code == 200, response.text
-    assert "评审" in response.json()["review"]
-    assert (project.dir / "reviews.md").exists()
 
 
 def test_live_preview_endpoint(client: TestClient) -> None:
@@ -129,13 +120,13 @@ def test_restart_resumes_from_checkpoint(tmp_path: Path) -> None:
         add_text(client, slug)
         client.post(f"/api/projects/{slug}/start", json={})
         state = wait_idle(client, slug)
-        assert state["interrupt"]["kind"] == "draft"
+        assert state["interrupt"]["kind"] == "outline"
 
     app2 = create_app(settings, seed=False)
     with TestClient(app2) as client:
         state = client.get(f"/api/projects/{slug}/state").json()
         assert state["status"] == "interrupted"
-        assert state["interrupt"]["kind"] == "draft"
+        assert state["interrupt"]["kind"] == "outline"
         resume(client, slug, {"action": "approve"})
         state = wait_idle(client, slug)
         assert state["stage"] == "awaiting_title"
@@ -236,7 +227,7 @@ digest: 摘要
 def test_style_promote_and_reset(client: TestClient, settings) -> None:
     slug = create_project(client)
     listed = client.get(f"/api/projects/{slug}/styles").json()
-    assert {item["kind"] for item in listed["files"]} == {"writing", "layout"}
+    assert {item["kind"] for item in listed["files"]} == {"writing"}
     text = "# 新文笔\n\n只改本项目的文笔。\n"
     saved = client.put(f"/api/projects/{slug}/styles", json={"kind": "writing", "text": text})
     assert saved.status_code == 200
@@ -246,6 +237,56 @@ def test_style_promote_and_reset(client: TestClient, settings) -> None:
     reset = client.post(f"/api/projects/{slug}/styles/reset", json={"kind": "writing"})
     assert reset.status_code == 200
     assert "只改本项目" in (settings.styles_root / "sessions" / slug / "writing-style.md").read_text("utf8")
+
+
+def test_global_style_syncs_to_all_projects(client: TestClient, settings) -> None:
+    first = create_project(client, "全局风格一", slug="global-one")
+    second = create_project(client, "全局风格二", slug="global-two")
+    overview = client.get("/api/style").json()
+    assert {item["kind"] for item in overview["files"]} == {"writing"}
+    assert {item["slug"] for item in overview["projects"]} == {first, second}
+
+    text = "# 全局文笔\n\n所有文章都用这一套。\n"
+    saved = client.put("/api/style", json={"kind": "writing", "text": text})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["result"]["synced"] == 2
+    assert (settings.styles_root / "writing-style.md").read_text("utf8") == text
+    for slug in (first, second):
+        assert (settings.styles_root / "sessions" / slug / "writing-style.md").read_text("utf8") == text
+        files = client.get(f"/api/projects/{slug}/styles").json()["files"]
+        assert all(not item["changed"] for item in files)
+
+
+def test_global_style_keeps_local_override_until_forced(client: TestClient, settings) -> None:
+    slug = create_project(client, "本地风格")
+    local = "# 本地文笔\n\n只改这篇。\n"
+    assert client.put(f"/api/projects/{slug}/styles", json={"kind": "writing", "text": local}).status_code == 200
+
+    saved = client.put("/api/style", json={"kind": "writing", "text": "# 全局文笔\n\n统一。\n"})
+    assert saved.status_code == 200
+    assert saved.json()["result"]["skipped"] == [slug]
+    assert (settings.styles_root / "sessions" / slug / "writing-style.md").read_text("utf8") == local
+
+    forced = client.post("/api/style/sync", json={"kind": "writing"})
+    assert forced.status_code == 200
+    assert forced.json()["result"]["synced"] == 1
+    assert (settings.styles_root / "sessions" / slug / "writing-style.md").read_text("utf8") == "# 全局文笔\n\n统一。\n"
+
+
+def test_global_style_reset_restores_defaults(client: TestClient, settings) -> None:
+    slug = create_project(client, "重置风格")
+    assert client.put("/api/style", json={"kind": "writing", "text": "# 改过的文笔\n\n- 一条。\n"}).status_code == 200
+    reset = client.post("/api/style/reset", json={"kind": "writing"})
+    assert reset.status_code == 200
+    default = (settings.styles_root / "writing-style.md").read_text("utf8")
+    assert "# 文笔风格" in default
+    assert (settings.styles_root / "sessions" / slug / "writing-style.md").read_text("utf8") == default
+
+
+def test_global_style_rejects_empty(client: TestClient) -> None:
+    bad = client.put("/api/style", json={"kind": "writing", "text": "  "})
+    assert bad.status_code == 400
+    assert bad.json()["detail"]["code"] == "BAD_STYLE"
 
 
 def test_delete_project_removes_directory_and_checkpoint(client: TestClient, settings) -> None:
@@ -331,18 +372,28 @@ def test_import_url(client: TestClient) -> None:
         server.server_close()
 
 
-def test_edit_endpoint_keeps_article_and_renders(client: TestClient) -> None:
+def test_edit_endpoint_previews_then_applies(client: TestClient) -> None:
     slug = create_project(client)
     project = client.app.state.ctx.store.load(slug)
-    (project.dir / "article.md").write_text(
-        "---\ntitle: 测试\ndigest: 摘要\n---\n\n第一段要改。\n\n第二段保留。\n",
-        "utf8",
-    )
-    response = client.post(
+    original = "---\ntitle: 测试\ndigest: 摘要\n---\n\n第一段要改。\n\n第二段保留。\n"
+    (project.dir / "article.md").write_text(original, "utf8")
+
+    preview = client.post(
         f"/api/projects/{slug}/edit",
         json={"instruction": "把第一段改得更具体", "selected": "第一段要改。"},
     )
-    assert response.status_code == 200, response.text
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["applied"] is False
+    # 未接受前不落盘，也不重排
+    assert (project.dir / "article.md").read_text("utf8") == original
+    assert not (project.dir / "dist/article.html").exists()
+
+    applied = client.post(
+        f"/api/projects/{slug}/edit",
+        json={"instruction": "把第一段改得更具体", "selected": "第一段要改。", "apply": True},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["applied"] is True
     article = (project.dir / "article.md").read_text("utf8")
     assert "第二段保留" in article
     assert (project.dir / "dist/article.html").exists()
@@ -406,3 +457,53 @@ def test_bilibili_srt_conversion() -> None:
     )
     assert "1\n00:00:00,000 --> 00:00:02,000\n第一句" in srt
     assert "第二句" in srt
+
+
+def test_export_and_import_round_trip(client: TestClient, settings) -> None:
+    slug = create_project(client, "导出测试", slug="export-src")
+    project = client.app.state.ctx.store.load(slug)
+    (project.dir / "article.md").write_text(
+        "---\ntitle: 导出测试\ndigest: 摘要\n---\n\n## 01 / 小节\n\n导出再导入的正文。\n",
+        "utf8",
+    )
+    response = client.get(f"/api/projects/{slug}/export")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/zip")
+    data = response.content
+    names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+    assert "manifest.json" in names
+    assert "project.json" in names
+    assert "article.md" in names
+
+    assert client.delete(f"/api/projects/{slug}").status_code == 200
+    imported = client.post("/api/projects/import", files={"file": ("bundle.zip", data, "application/zip")})
+    assert imported.status_code == 200, imported.text
+    new_slug = imported.json()["project"]["slug"]
+    article = client.get(f"/api/projects/{new_slug}/file", params={"path": "article.md"}).json()["text"]
+    assert "导出再导入的正文" in article
+    assert client.get(f"/api/projects/{new_slug}/state").json()["stage"] == "done"
+    assert (settings.styles_root / "sessions" / new_slug / "writing-style.md").exists()
+
+
+def test_import_markdown_article(client: TestClient) -> None:
+    md = "---\ntitle: 导入的文章\n---\n\n## 01 / 小节\n\n这是导入的正文。\n"
+    response = client.post("/api/projects/import", files={"file": ("imported.md", md.encode(), "text/markdown")})
+    assert response.status_code == 200, response.text
+    slug = response.json()["project"]["slug"]
+    state = client.get(f"/api/projects/{slug}/state").json()
+    assert state["stage"] == "done"
+    text = client.get(f"/api/projects/{slug}/file", params={"path": "article.md"}).json()["text"]
+    assert "这是导入的正文" in text
+
+
+def test_import_rejects_zip_slip(client: TestClient) -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("article.md", "# 正常正文\n")
+        archive.writestr("../evil.txt", "越界写入")
+    response = client.post(
+        "/api/projects/import",
+        files={"file": ("evil.zip", buffer.getvalue(), "application/zip")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "BAD_ARCHIVE"

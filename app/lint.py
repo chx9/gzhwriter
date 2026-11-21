@@ -9,7 +9,7 @@ from typing import Any
 
 import regex
 
-from .materials import MARKER_RE, OPINION_RE, load_content, strip_markers
+from .materials import LOOSE_MARKER_RE, MARKER_RE, OPINION_RE, load_content, strip_markers
 from .render.markdown import PENDING_SRC
 from .storage import Project, char_count, parse_frontmatter, read_text, sha256, truncate
 
@@ -290,7 +290,7 @@ def lint_article(
 
     html = read_text(project.dir / "dist/article.html", "") or ""
     if html:
-        if MARKER_RE.search(html) or OPINION_RE.search(html):
+        if MARKER_RE.search(html) or OPINION_RE.search(html) or LOOSE_MARKER_RE.search(html):
             add("error", "marker-leftover", "dist/article.html 里仍有溯源标记")
         if re.search(r"<style|class=|<script", html, re.I):
             add("error", "html-unsafe", "dist/article.html 含 <style>/class/<script>，公众号会丢弃这些样式")

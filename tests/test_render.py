@@ -112,7 +112,7 @@ author: 作者
     resolved = library.resolve("wechat")
     info = render_article(project, theme_css=resolved["css"], theme="wechat")
     article_html = (project.dir / "dist/article.html").read_text("utf8")
-    preview_html = (project.dir / "dist/preview.html").read_text("utf8")
+    preview_html = info["previewHtml"]
     assert "class=" not in article_html
     assert "style=" in article_html
     assert "<style" not in article_html
@@ -125,3 +125,19 @@ author: 作者
     assert "images/fig-01.png" in article_html
     assert "data:image/png;base64" in preview_html
     assert info["pendingImages"]
+
+
+def test_loose_markers_are_stripped_but_link_text_kept() -> None:
+    from app.materials import strip_markers
+    from app.render.render import apply_citations
+
+    body = (
+        "一个时代结束了[A02标题]。这是判断[A01¶1；观点]。"
+        "看图 ![A02 服务器图](images/a.png)，再读 [A03 财报](https://example.com)。"
+    )
+    out, _ = apply_citations(body, "strip")
+    assert "[A02标题]" not in out
+    assert "[A01¶1；观点]" not in out
+    assert "![A02 服务器图](images/a.png)" in out
+    assert "[A03 财报](https://example.com)" in out
+    assert strip_markers("[A02标题]") == ""

@@ -1,6 +1,6 @@
 # 稿纸 · 公众号写作
 
-一个以**文章本身**为中心的公众号写作工具：素材丢进来，AI 在后台消化、拟大纲、写初稿；你在编辑器里过目、划一段让 AI 改、最后排版复制。只在初稿完成时停一次。
+一个以**文章本身**为中心的公众号写作工具：素材丢进来，AI 在后台消化、拟大纲；你过目大纲后直接生成初稿；正文在编辑器里改、划一段让 AI 改，最后排版复制。只在大纲完成时停一次。
 
 **一篇文章 = 一个项目。** 项目里保存素材、正文、配图和排版产物；状态在 SQLite 里，刷新页面、重启服务都接着走。
 
@@ -9,19 +9,22 @@
 ## 它怎么用
 
 ```text
-新建文章（标题 + 可选素材）→ AI 直接开写（后台：消化 · 大纲 · 初稿）
-      → 初稿完成，停一次 → 你直接改 / chatbox 让 AI 改（diff 确认）
-      → 定稿 → 选标题（5 选 1）→ 发布页：补图 · 检查 · 换主题 · 复制到公众号
+新建文章（标题 + 可选素材）→ AI 直接开写（后台：消化 · 简报 · 大纲）
+      → 大纲完成，停一次 → 你直接改大纲 / 让 AI 重拟
+      → 生成文章（自动写正文 + 5 个标题）→ 正文里直接改 / chatbox 让 AI 改（diff 确认）
+      → 选标题 → 发布页：补图 · 检查 · 换主题 · 复制到公众号
 ```
 
 新建时只问一个问题（标题/选题），素材可以直接拖进创建框；有素材就自动开写，LLM 根据素材自己写出大概，之后你在编辑器里接管。
 
-- **只停一次**：没有四道审批。AI 的工序（简报、消化、大纲）在后台完成，产物落盘但不打扰你。
+- **只停一次**：没有多道审批。AI 的工序（简报、消化、大纲）在后台完成，只在大纲完成时停一次；确认后直接写正文。
 - **正文默认是渲染稿**：中间直接看排版后的文章（阅读 / 源码一键切换），右侧 375px 手机预览只读、随正文滚动同步。
 - **chatbox 改稿**：底部是对文章说话的输入框（Enter 发送）；在正文里选中一段再发，就只改那一部分；AI 的修改以 diff 卡片呈现，接受才生效。
 - **批注在正文上做**：正文里选中文字 → 加批注；已批注的原文像荧光笔一样高亮，点击即可浮出批注内容；批注可一键全部交给 AI 改。
-- **标题 5 选 1**：定稿后标题候选出现在编辑器上方，点一个就写回 frontmatter 并排版。
+- **标题 5 选 1**：正文生成后，标题候选出现在编辑器上方，点一个就写回 frontmatter 并排版。
+- **文章风格全局一份**：顶栏「风格」页定义文笔风格，保存后一键同步到所有文章；个别文章单独改过的会标出来，可选择保留或覆盖。
 - **排版可交付**：Markdown → 语义 HTML → 主题 CSS 算成行内样式；输出 `dist/article.html`，直接粘进公众号编辑器。
+- **导入导出**：整篇文章（正文、素材、配图、过程稿、排版产物）导出为 ZIP；导入支持 ZIP 整包或单篇 Markdown，自动换新 slug 并重排。
 - **离线可跑**：没有 `OPENAI_API_KEY` 时自动进入演示模式，界面明确标注。
 
 ## 界面
@@ -38,7 +41,7 @@
 |---|---|
 | ![diff](docs/screenshots/diff.png) | ![发布](docs/screenshots/publish.png) |
 
-顶部只有 **写作 · 发布** 两个视图。
+顶部是 **写作 · 发布 · 风格** 三个标签。
 
 - **写作**：VS Code 式三栏——左边是文件资源管理器（「正文」置顶特殊标记，其余是素材与过程文件），中间是**渲染后的正文**（批注、划选改稿都在这里，可切「源码」编辑 Markdown），右边是只读的 375px 手机预览，底部是 chatbox。
 - **发布**：手机预览、发布检查清单、待补图位、主题切换、复制到公众号。
@@ -110,13 +113,12 @@ GZH_BILIBILI_COOKIE_FILE=/path/to/cookies.txt
 ## 工作流（后台）
 
 ```text
-START → prepare → research（简报+消化+大纲，内部产物）→ draft → ◆interrupt：初稿完成
-      → titles（生成 5 个标题候选）→ END
+START → prepare → research（简报+消化）→ outline → ◆interrupt：大纲完成
+      → draft（写正文）→ titles（生成 5 个标题候选）→ END
 ```
 
-- 整个图只有**一次 interrupt**：初稿完成。确认后进 `titles`，之后图结束。
+- 整个图只有**一次 interrupt**：大纲完成。确认后 direct `draft` + `titles`，之后图结束，正文直接在编辑器里改。
 - 标题选定不走图：用户点候选 → `POST /title` 写回 frontmatter、渲染、标记完成。
-- 评审保留了 `POST /review` API（后端能力），当前界面不再展示「帮我检查」入口；日常改稿走 chatbox 与批注。
 - AI 改稿（划选/全文）也是独立 API（`POST /edit`），返回改动前后文本，前端 diff 确认后落盘。
 - `thread_id = slug`，SQLite checkpointer 持久化；服务重启后中断/已完成状态都能恢复。
 
@@ -127,12 +129,11 @@ workspace/
   wechat-projects/<slug>/
     project.json          素材索引 + workflow 状态
     article.md            正文（frontmatter + 溯源标记）
-    brief.md outline.md digest.md reviews.md progress.md   # 内部产物
+    brief.md outline.md    # 内部产物
     checks.json           最近一次 lint + source check
-    title-options.json    标题候选
     sources/<A01…>/{original.*, content.md, digest.md, meta.json}
     images/fig-01.png
-    dist/article.html preview.html
+    dist/article.html
     .materials-comments.json
   styles/                 全局风格 + 主题库 + 每项目副本
   gzh.sqlite              LangGraph checkpoints
@@ -156,6 +157,8 @@ workspace/
 |---|---|---|
 | GET | `/api/health` | 版本 / demo / 模型 |
 | GET/POST | `/api/projects` | 文章列表 / 新建 |
+| POST | `/api/projects/import` | 导入（`.zip` 整包或 `.md`） |
+| GET | `/api/projects/{slug}/export` | 导出整篇文章 ZIP |
 | GET/DELETE | `/api/projects/{slug}` | 详情 / 删除（含 checkpoint） |
 | POST | `/api/projects/{slug}/materials/upload|text|url` | 素材入库 |
 | GET | `/api/projects/{slug}/sources` · `/sources/{id}/read` | 素材列表 / 按锚点读 |
@@ -163,8 +166,7 @@ workspace/
 | POST | `/api/projects/{slug}/resume` | `{action: approve|revise, feedback?}` |
 | GET | `/api/projects/{slug}/state` · `/events` | 状态轮询 / SSE |
 | POST | `/api/projects/{slug}/preview` | 实时预览（不落盘，传 markdown 或读文件） |
-| POST | `/api/projects/{slug}/edit` | AI 改稿，返回 before/after |
-| POST | `/api/projects/{slug}/review` | 按需评审 |
+| POST | `/api/projects/{slug}/edit` | AI 改稿预览，返回 before/after（`apply=true` 才写入） |
 | POST | `/api/projects/{slug}/title` | 选定标题/摘要，写回并排版 |
 | GET | `/api/projects/{slug}/deliverable` | 成稿 HTML / stale / 检查 |
 | POST | `/api/projects/{slug}/render` | 重新排版 |
@@ -179,7 +181,7 @@ source .venv/bin/activate && pytest -q
 (cd web && npm run typecheck && npm run build)
 ```
 
-覆盖：素材解析（md/txt/html/srt/vtt/docx/URL）、锚点、11 主题 golden 渲染、lint/source check、单中断全流程（开始 → 初稿 → 定稿 → 选标题 → 交付）、revise 回路、重启恢复、按需评审、实时预览不落盘、diff 数据、图位、评论、路径安全。
+覆盖：素材解析（md/txt/html/srt/vtt/docx/URL）、锚点、11 主题 golden 渲染、lint/source check、单中断全流程（开始 → 大纲确认 → 正文 → 选标题 → 交付）、大纲 revise 回路、重启恢复、实时预览不落盘、diff 数据、图位、评论、路径安全。
 
 ## 已知边界
 
@@ -187,7 +189,7 @@ source .venv/bin/activate && pytest -q
 - 不做公众号草稿推送；图片需在公众号编辑器里重新上传。
 - 不支持 PDF / 音频 / 视频直接解析。
 - 演示模式只保证流程与结构，内容质量不代表真实模型。
-- 评审 API（`POST /review`）保留但界面未接入；改稿以 chatbox / 批注 → diff 确认为主。
+- 改稿以 chatbox / 批注 → diff 确认为主。
 
 ## 目录结构
 

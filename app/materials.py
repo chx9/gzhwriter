@@ -487,6 +487,9 @@ TIME = r"\d{1,2}:\d{2}(?::\d{2})?"
 REF_TOKEN = rf"[AS]\d{{2,3}}(?:¶\d+(?:-\d+)?|@{TIME}(?:-{TIME})?)?"
 MARKER_RE = re.compile(rf"\[({REF_TOKEN}(?:\s*[;；,，、]\s*{REF_TOKEN})*)\]")
 OPINION_RE = re.compile(r"\[观点\]")
+# 模型偶尔写出不合规的标记：[A02标题]、[A01¶1；观点]。渲染时一并剥掉。
+# 后面紧跟 "(" 的是 Markdown 链接/图片的文字，例如 ![A02 图](…)，不能剥。
+LOOSE_MARKER_RE = re.compile(r"\[(?:[AS]\d{1,3}|观点)[^\[\]\n]{0,60}\](?!\()")
 
 
 def parse_ref(token: str) -> dict[str, Any] | None:
@@ -512,7 +515,8 @@ def refs_in(text: str) -> list[dict[str, Any]]:
 
 
 def strip_markers(text: str) -> str:
-    return OPINION_RE.sub("", MARKER_RE.sub("", str(text or "")))
+    value = OPINION_RE.sub("", MARKER_RE.sub("", str(text or "")))
+    return LOOSE_MARKER_RE.sub("", value)
 
 
 def parse_content(text: str) -> list[dict[str, Any]]:

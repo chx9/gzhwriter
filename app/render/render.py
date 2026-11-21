@@ -1,4 +1,4 @@
-"""文章渲染：article.md → dist/article.html + dist/preview.html。"""
+"""文章渲染：article.md → dist/article.html。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from ..materials import MARKER_RE, OPINION_RE, find_source, refs_in
+from ..materials import LOOSE_MARKER_RE, MARKER_RE, OPINION_RE, find_source, refs_in
 from ..storage import Project, char_count, parse_frontmatter, read_text, sha256, write_text
 from .css import inline_css
 from .markdown import markdown_to_html
@@ -52,6 +52,7 @@ def apply_citations(body: str, mode: str) -> tuple[str, list[str]]:
             note(ref["id"])
         out = MARKER_RE.sub("", out)
     out = OPINION_RE.sub("", out)
+    out = LOOSE_MARKER_RE.sub("", out)
     out = re.sub(r"[ \t]+([，。！？；：、,.!?;:）)」”])", r"\1", out)
     out = re.sub(r"^[ \t]+", "", out, flags=re.M)
     out = re.sub(r"[ \t]+$", "", out, flags=re.M)
@@ -244,5 +245,4 @@ def render_article(
         author=author,
     )
     write_text(project.dir / "dist/article.html", result["fragment"])
-    write_text(project.dir / "dist/preview.html", result["previewHtml"])
     return result

@@ -5,10 +5,12 @@ import type { AppEvent, Health, ProjectDetail, ProjectSummary, RunnerState, Them
 import { Badge, Empty, Icon, useToast } from './ui'
 import { WriteView } from './views/WriteView'
 import { PublishView } from './views/PublishView'
+import { StyleView } from './views/StyleView'
 
 const MAIN_TABS: { id: AppView; label: string }[] = [
   { id: 'write', label: '写作' },
   { id: 'publish', label: '发布' },
+  { id: 'style', label: '风格' },
 ]
 
 export function App() {
@@ -21,6 +23,8 @@ export function App() {
   const [themes, setThemes] = useState<ThemeInfo[]>([])
   const [changing, setChanging] = useState(false)
   const [showNew, setShowNew] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const importRef = useRef<HTMLInputElement>(null)
   const bootRedirected = useRef(false)
 
   const slug = route.slug
@@ -57,11 +61,11 @@ export function App() {
   }, [refreshProjects])
 
   useEffect(() => {
-    if (!slug && projects.length && !bootRedirected.current) {
+    if (!slug && projects.length && !bootRedirected.current && route.view !== 'style') {
       bootRedirected.current = true
       navigate(projects[0].slug, 'write')
     }
-  }, [slug, projects])
+  }, [slug, projects, route.view])
 
   useEffect(() => {
     setDetail(null)
@@ -73,6 +77,10 @@ export function App() {
     if (!detail) return
     document.title = `${detail.summary.title} · 稿纸`
   }, [detail])
+
+  useEffect(() => {
+    if (route.view === 'style') document.title = '文章风格 · 稿纸'
+  }, [route.view])
 
   usePolling(() => {
     if (slug && state?.status === 'running') refreshDetail()
@@ -144,7 +152,43 @@ export function App() {
     }
   }
 
+  const importProject = async (file: File) => {
+    setImporting(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const data = await api.upload<{ project: ProjectSummary }>('/api/projects/import', form)
+      await refreshProjects()
+      navigate(data.project.slug, 'write')
+      notify('文章已导入', 'ok')
+    } catch (error: any) {
+      notify(error.message, 'error')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const exportProject = () => {
+    if (!slug) return
+    const anchor = document.createElement('a')
+    anchor.href = `/api/projects/${slug}/export`
+    anchor.download = ''
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+  }
+
   const changeProject = (next: string) => navigate(next, route.view === 'home' ? 'write' : route.view)
+
+  const openTab = (view: AppView) => {
+    if (view === 'style') {
+      navigate(slug, 'style')
+      return
+    }
+    const target = slug || projects[0]?.slug
+    if (target) navigate(target, view)
+    else if (!projects.length) notify('先新建一篇文章', 'info')
+  }
 
   const current = detail?.summary || projects.find((item) => item.slug === slug) || null
 
@@ -159,15 +203,13 @@ export function App() {
           </span>
         </button>
 
-        {current ? (
-          <nav className="main-tabs" aria-label="主导航">
-            {MAIN_TABS.map((tab) => (
-              <button key={tab.id} className={route.view === tab.id ? 'active' : ''} onClick={() => navigate(slug, tab.id)}>
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        ) : null}
+        <nav className="main-tabs" aria-label="主导航">
+          {MAIN_TABS.map((tab) => (
+            <button key={tab.id} className={route.view === tab.id ? 'active' : ''} onClick={() => openTab(tab.id)}>
+              {tab.label}
+            </button>
+          ))}
+        </nav>
 
         <div className="topbar-spacer" />
 
@@ -190,11 +232,32 @@ export function App() {
           </select>
         ) : null}
 
+        <button className="icon-button" onClick={() => importRef.current?.click()} disabled={importing} title="导入文章（.zip 或 .md）">
+          {importing ? <span className="spinner" /> : <Icon name="upload" size={17} />}
+        </button>
+        <input
+          ref={importRef}
+          type="file"
+          accept=".zip,.md,.markdown,.txt"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file) importProject(file)
+            event.target.value = ''
+          }}
+        />
+
         <button className="button button-primary button-small" onClick={() => setShowNew(true)}>
           <Icon name="plus" size={16} /> 新建文章
         </button>
 
-        {slug ? (
+        {slug && route.view !== 'style' ? (
+          <button className="icon-button" onClick={exportProject} title="导出文章（ZIP）">
+            <Icon name="download" size={17} />
+          </button>
+        ) : null}
+
+        {slug && route.view !== 'style' ? (
           <button className="icon-button danger" onClick={deleteProject} title="删除文章">
             <Icon name="trash" size={17} />
           </button>
@@ -209,8 +272,15 @@ export function App() {
       ) : null}
 
       <main className="app-main">
-        {!current ? (
-          <Home projects={projects} onCreate={() => setShowNew(true)} onOpen={(next) => navigate(next, 'write')} />
+        {route.view === 'style' ? (
+          <StyleView />
+        ) : !current ? (
+          <Home
+            projects={projects}
+            onCreate={() => setShowNew(true)}
+            onOpen={(next) => navigate(next, 'write')}
+            onImport={() => importRef.current?.click()}
+          />
         ) : route.view === 'write' ? (
           <WriteView key={current.slug} slug={current.slug} summary={current} state={state} detail={detail} onRefresh={refreshDetail} onSaved={refreshProjects} />
         ) : (
@@ -223,7 +293,17 @@ export function App() {
   )
 }
 
-function Home({ projects, onCreate, onOpen }: { projects: ProjectSummary[]; onCreate: () => void; onOpen: (slug: string) => void }) {
+function Home({
+  projects,
+  onCreate,
+  onOpen,
+  onImport,
+}: {
+  projects: ProjectSummary[]
+  onCreate: () => void
+  onOpen: (slug: string) => void
+  onImport: () => void
+}) {
   return (
     <div className="home">
       <section className="home-hero">
@@ -235,11 +315,16 @@ function Home({ projects, onCreate, onOpen }: { projects: ProjectSummary[]; onCr
             能直接发的文章。
           </h1>
           <p className="home-lead">
-            素材丢进来，AI 在后台消化、拟大纲、写初稿；你在编辑器里过目、让 AI 改、最后排版复制。只在初稿完成时停一次。
+            素材丢进来，AI 在后台消化、拟大纲；你过目大纲后直接生成初稿；正文在编辑器里改、划一段让 AI 改，最后排版复制。只在大纲完成时停一次。
           </p>
-          <button className="button button-primary" onClick={onCreate}>
-            <Icon name="plus" size={17} /> 开始一篇新文章
-          </button>
+          <div className="home-actions">
+            <button className="button button-primary" onClick={onCreate}>
+              <Icon name="plus" size={17} /> 开始一篇新文章
+            </button>
+            <button className="button button-secondary" onClick={onImport}>
+              <Icon name="upload" size={16} /> 导入文章
+            </button>
+          </div>
         </div>
         <div className="home-note">
           <span className="note-number">01</span>

@@ -43,7 +43,7 @@ export interface Checks {
 }
 
 export interface InterruptPayload {
-  kind: 'draft'
+  kind: 'outline'
   title: string
   content: string
   path: string
@@ -143,6 +143,32 @@ export interface ThemeInfo {
   active?: boolean
 }
 
+export type StyleKind = 'writing'
+
+export interface StyleFile {
+  kind: StyleKind
+  label: string
+  filename: string
+  exists: boolean
+  text: string
+  bytes: number
+  defaultText: string
+}
+
+export interface StyleProject {
+  slug: string
+  title: string
+  changed: StyleKind[]
+}
+
+export interface StyleOverview {
+  files: StyleFile[]
+  projects: StyleProject[]
+  root: string
+  maxChars: number
+  result?: { synced: number; skipped: string[] }
+}
+
 export interface Health {
   ok: boolean
   version: string
@@ -157,7 +183,6 @@ export interface Health {
 export interface Deliverable {
   html: string
   copyHtml: string
-  previewUrl: string
   renderedAt: number
   articleChangedAt: number | null
   stale: boolean

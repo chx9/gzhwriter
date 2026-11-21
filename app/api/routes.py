@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Body, File, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from .. import __version__
 from ..comments import add_comment, delete_comment, read_comments, update_comment, write_comments
@@ -23,7 +23,8 @@ from ..materials import import_materials, read_refs
 from ..render_service import apply_title
 from ..render_service import deliverable as build_deliverable
 from ..render_service import render_project
-from ..storage import read_text, safe_join, truncate, write_json, write_text
+from ..storage import safe_join
+from ..transfer import build_export, import_upload
 
 router = APIRouter(prefix="/api")
 
@@ -121,6 +122,38 @@ def create_project(request: Request, payload: dict[str, Any] = Body(...)) -> dic
     except ApiError:
         pass
     return {"project": _summary(request, project.slug), "state": app.runner.state(project.slug)}
+
+
+@router.post("/projects/import")
+async def import_project(request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
+    """导入文章：支持导出的 .zip 整项目包，或单篇 .md。"""
+    app = ctx(request)
+    data = await file.read()
+    project = await asyncio.to_thread(
+        import_upload,
+        data,
+        file.filename or "upload.zip",
+        store=app.store,
+        styles=app.styles,
+        themes=app.themes,
+        settings=app.settings,
+    )
+    return {"project": _summary(request, project.slug), "state": app.runner.state(project.slug)}
+
+
+@router.get("/projects/{slug}/export")
+def export_project(request: Request, slug: str) -> Response:
+    """把整篇文章（正文、素材、配图、过程稿、排版产物）打成 ZIP 下载。"""
+    app = ctx(request)
+    project = app.store.load(slug)
+    if app.runner.is_running(slug):
+        raise Conflict("文章正在运行，等它停下再导出", "RUNNING")
+    data, filename = build_export(project)
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"content-disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/projects/{slug}")
@@ -335,13 +368,16 @@ async def edit_article(request: Request, slug: str, payload: dict[str, Any] = Bo
         selected=selected,
         file_label=target,
     )
-    target_path.write_text(edited.rstrip() + "\n", "utf8")
-    result: dict[str, Any] = {"before": original, "article": edited, "file": target}
-    if target == "article.md":
-        info, checks = await asyncio.to_thread(
-            render_project, project, settings=app.settings, styles=app.styles, themes=app.themes
-        )
-        result.update({"info": info, "checks": checks, "deliverable": build_deliverable(project)})
+    result: dict[str, Any] = {"before": original, "article": edited, "file": target, "applied": False}
+    # 默认只返回 diff 预览，不落盘；用户在界面上接受后才写入（apply=true）。
+    if bool(payload.get("apply", False)):
+        target_path.write_text(edited.rstrip() + "\n", "utf8")
+        result["applied"] = True
+        if target == "article.md":
+            info, checks = await asyncio.to_thread(
+                render_project, project, settings=app.settings, themes=app.themes
+            )
+            result.update({"info": info, "checks": checks, "deliverable": build_deliverable(project)})
     return result
 
 
@@ -363,14 +399,13 @@ def live_preview(request: Request, slug: str, payload: dict[str, Any] | None = B
     from ..render_service import resolve_sheet
     from ..render.render import compose_article
 
-    css, meta, params = resolve_sheet(app.styles, app.themes, slug)
+    css, meta = resolve_sheet(app.themes, slug)
     result = compose_article(
         project,
         text,
         theme_css=css,
-        theme=app.themes.effective_id(slug, params.get("legacyTheme")),
+        theme=app.themes.effective_id(slug),
         theme_meta=meta,
-        accent=params.get("accent"),
         author=app.settings.author,
     )
     return {
@@ -395,30 +430,10 @@ async def pick_title(request: Request, slug: str, payload: dict[str, Any] = Body
         title=str(payload.get("title") or ""),
         digest=str(payload.get("digest") or ""),
         settings=app.settings,
-        styles=app.styles,
         themes=app.themes,
     )
     app.store.set_stage(slug, "done", "done", title=str(payload.get("title") or ""))
     return {**result, "deliverable": build_deliverable(project)}
-
-
-@router.post("/projects/{slug}/review")
-async def review_article(request: Request, slug: str) -> dict[str, Any]:
-    """按需评审：不是流水线节点，用户点「帮我检查」时调用。"""
-    app = ctx(request)
-    project = app.store.load(slug)
-    if app.runner.is_running(slug):
-        raise Conflict("流水线正在运行，等它停下再检查", "RUNNING")
-    article_path = project.dir / "article.md"
-    if not article_path.exists():
-        raise NotFound("还没有 article.md", "NO_ARTICLE")
-    brief = read_text(project.dir / "brief.md", "") or ""
-    review = await asyncio.to_thread(app.llm.review, project, article=article_path.read_text("utf8"), brief=brief)
-    write_text(project.dir / "reviews.md", review.rstrip() + "\n")
-    checks = await asyncio.to_thread(
-        render_project, project, settings=app.settings, styles=app.styles, themes=app.themes
-    )
-    return {"review": review, "checks": checks[1], "deliverable": build_deliverable(project)}
 
 
 # ── files / deliverable / checks ────────────────────────────────────
@@ -438,10 +453,10 @@ def read_file(request: Request, slug: str, path: str, scope: str = "project", ma
     app = ctx(request)
     project = app.store.load(slug)
     if scope == "styles":
-        if path not in {"writing-style.md", "layout-style.md"}:
-            raise ApiError("只能查看两份风格文件", "BAD_PATH")
+        if path != "writing-style.md":
+            raise ApiError("只能查看文笔风格文件", "BAD_PATH")
         directory = app.styles.ensure_session(slug)
-        guide = app.styles.read(directory, "writing" if path.startswith("writing") else "layout")
+        guide = app.styles.read(directory, "writing")
         return {"path": path, "kind": "text", "text": guide["text"], "editable": True, "bytes": len(guide["text"].encode("utf8")), "mtime": 0}
     return app.store.read_file(slug, path, max_bytes=maxBytes or app.settings.max_read_bytes)
 
@@ -455,10 +470,9 @@ def write_file(request: Request, slug: str, payload: dict[str, Any] = Body(...))
     if not isinstance(text, str):
         raise ApiError("text 必须是字符串", "BAD_BODY")
     if payload.get("scope") == "styles":
-        if path not in {"writing-style.md", "layout-style.md"}:
-            raise ApiError("只能编辑两份风格文件", "BAD_PATH")
-        kind = "writing" if path.startswith("writing") else "layout"
-        return app.styles.write(app.styles.ensure_session(slug), kind, text)
+        if path != "writing-style.md":
+            raise ApiError("只能编辑文笔风格文件", "BAD_PATH")
+        return app.styles.write(app.styles.ensure_session(slug), "writing", text)
     return app.store.write_file(slug, path, text)
 
 
@@ -494,7 +508,7 @@ def checks(request: Request, slug: str) -> dict[str, Any]:
     existing = build_checks_quiet(project)
     if existing:
         return existing
-    _, fresh = render_project(project, settings=ctx(request).settings, styles=ctx(request).styles, themes=ctx(request).themes)
+    _, fresh = render_project(project, settings=ctx(request).settings, themes=ctx(request).themes)
     return fresh
 
 
@@ -502,7 +516,7 @@ def checks(request: Request, slug: str) -> dict[str, Any]:
 def render(request: Request, slug: str) -> dict[str, Any]:
     app = ctx(request)
     project = app.store.load(slug)
-    info, checks = render_project(project, settings=app.settings, styles=app.styles, themes=app.themes)
+    info, checks = render_project(project, settings=app.settings, themes=app.themes)
     return {"info": info, "checks": checks, "deliverable": build_deliverable(project)}
 
 
@@ -542,7 +556,7 @@ async def fill(request: Request, slug: str) -> dict[str, Any]:
             raise ApiError("缺少 dataUrl 或文件", "BAD_IMAGE")
     result = fill_slot(project, line=line, raw=raw, data_url=data_url, data=data, mime=mime)
     try:
-        info, checks = render_project(project, settings=app.settings, styles=app.styles, themes=app.themes)
+        info, checks = render_project(project, settings=app.settings, themes=app.themes)
         result["render"] = {"ok": True, "info": info, "checks": checks}
     except Exception as exc:  # noqa: BLE001
         result["render"] = {"ok": False, "code": getattr(exc, "code", "RENDER_FAILED"), "message": str(exc)}
@@ -555,7 +569,7 @@ def clear(request: Request, slug: str, payload: dict[str, Any] = Body(...)) -> d
     project = app.store.load(slug)
     result = clear_slot(project, line=int(payload.get("line") or 0), raw=str(payload.get("raw") or ""))
     try:
-        info, checks = render_project(project, settings=app.settings, styles=app.styles, themes=app.themes)
+        info, checks = render_project(project, settings=app.settings, themes=app.themes)
         result["render"] = {"ok": True, "info": info, "checks": checks}
     except Exception as exc:  # noqa: BLE001
         result["render"] = {"ok": False, "code": getattr(exc, "code", "RENDER_FAILED"), "message": str(exc)}
@@ -591,6 +605,61 @@ def replace_comments(request: Request, slug: str, payload: dict[str, Any] = Body
 
 
 # ── styles / themes ─────────────────────────────────────────────────
+
+
+def _style_projects(app: AppContext) -> list[dict[str, Any]]:
+    sessions = {item["slug"]: item for item in app.styles.sessions()}
+    projects = []
+    for item in app.store.list():
+        session = sessions.get(item["slug"]) or {"changed": []}
+        projects.append({"slug": item["slug"], "title": item["title"], "changed": session["changed"]})
+    return projects
+
+
+def _style_payload(app: AppContext) -> dict[str, Any]:
+    return {**app.styles.list_global(), "projects": _style_projects(app)}
+
+
+@router.get("/style")
+def global_style(request: Request) -> dict[str, Any]:
+    """全局文章风格：所有文章共用一份文笔 / 排版说明。"""
+    return _style_payload(ctx(request))
+
+
+@router.put("/style")
+def write_global_style(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    app = ctx(request)
+    kind = str(payload.get("kind") or "")
+    text = payload.get("text")
+    if not isinstance(text, str):
+        raise ApiError("text 必须是字符串", "BAD_BODY")
+    result = app.styles.write_global(
+        kind,
+        text,
+        sync=bool(payload.get("sync", True)),
+        overwrite_custom=bool(payload.get("overwriteCustom", False)),
+    )
+    return {**_style_payload(app), "result": result}
+
+
+@router.post("/style/sync")
+def sync_global_style(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """把全局风格强制覆盖到某篇文章（slug）或全部文章。"""
+    app = ctx(request)
+    result = app.styles.sync(
+        str(payload.get("kind") or ""),
+        slug=str(payload.get("slug") or "") or None,
+        overwrite_custom=bool(payload.get("overwriteCustom", True)),
+    )
+    return {**_style_payload(app), "result": result}
+
+
+@router.post("/style/reset")
+def reset_global_style(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """恢复默认风格，并同步到所有文章。"""
+    app = ctx(request)
+    result = app.styles.reset_global(str(payload.get("kind") or ""), sync=bool(payload.get("sync", True)))
+    return {**_style_payload(app), "result": result}
 
 
 @router.get("/projects/{slug}/styles")
@@ -646,7 +715,7 @@ def set_theme(request: Request, slug: str, payload: dict[str, Any] = Body(...)) 
     app.store.save(project)
     response: dict[str, Any] = {"theme": theme, "themes": app.themes.list(), "default": app.themes.default_id()}
     if payload.get("rerender", True) and (project.dir / "article.md").exists():
-        info, checks = render_project(project, settings=app.settings, styles=app.styles, themes=app.themes)
+        info, checks = render_project(project, settings=app.settings, themes=app.themes)
         response["info"] = info
         response["checks"] = checks
         response["deliverable"] = build_deliverable(project)

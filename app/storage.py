@@ -20,10 +20,6 @@ EDITABLE = {
     "article.md",
     "brief.md",
     "outline.md",
-    "digest.md",
-    "reviews.md",
-    "progress.md",
-    "sources/compare.md",
     "sources/index.md",
 }
 EDITABLE_PATTERNS = (
@@ -189,11 +185,6 @@ def title_of_markdown(text: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
-def stage_of_progress(text: str) -> str | None:
-    match = re.search(r"##\s*当前阶段\s*\n+([^\n#]+)", text or "")
-    return match.group(1).strip() if match else None
-
-
 # ── files ───────────────────────────────────────────────────────────
 
 
@@ -317,10 +308,6 @@ class ProjectStore:
             "workflow": {"stage": "materials", "status": "idle", "reviewRound": 0},
         }
         write_json(directory / "project.json", meta)
-        write_text(
-            directory / "progress.md",
-            f"# 进度：{meta['title']}\n\n## 当前阶段\n素材入库：等待上传或粘贴素材\n\n## 已确认\n- （暂无）\n\n## 待办\n- [ ] 上传素材\n- [ ] 确认选题简报\n- [ ] 确认大纲\n- [ ] 评审定稿\n- [ ] 确认标题\n- [ ] 排版交付\n",
-        )
         return Project(directory, meta)
 
     def load(self, slug: str) -> Project:
@@ -372,14 +359,13 @@ class ProjectStore:
             except ApiError:
                 continue
             article = read_text(directory / "article.md", "") or ""
-            progress = read_text(directory / "progress.md", "") or ""
             workflow = project.workflow
             items.append(
                 {
                     "slug": project.slug,
                     "title": title_of_markdown(article) or project.meta.get("title") or project.slug,
                     "topic": project.meta.get("topic", ""),
-                    "stage": workflow.get("stage") or stage_of_progress(progress) or "materials",
+                    "stage": workflow.get("stage") or "materials",
                     "status": workflow.get("status", "idle"),
                     "sourceCount": len(project.sources),
                     "hasArticle": bool(article.strip()),

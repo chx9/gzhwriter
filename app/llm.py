@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import httpx
@@ -15,20 +14,16 @@ from .demo import DemoWriter
 from .errors import ApiError
 from .materials import load_content, material_context, read_refs
 from .prompts import (
-    REVIEW_ROLES,
     brief_prompt,
     clean_prompt,
-    compare_prompt,
     digest_prompt,
     draft_prompt,
     edit_prompt,
-    merge_review_prompt,
     outline_prompt,
-    review_prompt,
     system_prompt,
     title_prompt,
 )
-from .storage import Project, char_count, read_text, truncate
+from .storage import Project
 from .styles import StyleStore
 from .render.themes import ThemeLibrary
 
@@ -191,13 +186,10 @@ class WriterEngine:
     def _system(self, project: Project) -> str:
         directory = self.styles.ensure_session(project.slug)
         writing = self.styles.read(directory, "writing")["text"]
-        layout = self.styles.read(directory, "layout")["text"]
-        params = self.styles.layout_params(project.slug)
-        theme_id = self.themes.effective_id(project.slug, params.get("legacyTheme"))
-        theme = self.themes.resolve(theme_id, accent=params.get("accent"))
+        theme_id = self.themes.effective_id(project.slug)
+        theme = self.themes.resolve(theme_id)
         return system_prompt(
             writing_style=writing,
-            layout_style=layout,
             theme_name=f"{theme['id']}（{theme['meta'].get('name', theme['id'])}）",
             theme_guide=theme["meta"].get("guide", ""),
             original_mode=True,
@@ -249,17 +241,6 @@ class WriterEngine:
             temperature=0.3,
         )
 
-    def compare(self, project: Project, digests: list[str]) -> str:
-        if self.demo_mode:
-            return self.demo.compare(project)
-        return self._chat(
-            [
-                {"role": "system", "content": self._system(project)},
-                *compare_prompt("\n\n".join(digests)[: self.settings.max_context_chars]),
-            ],
-            temperature=0.3,
-        )
-
     def outline(self, project: Project, *, brief: str, feedback: str = "") -> str:
         if self.demo_mode:
             return self.demo.outline(project, brief=brief, feedback=feedback)
@@ -302,56 +283,6 @@ class WriterEngine:
             ],
             temperature=0.8,
         )
-
-    def review(self, project: Project, *, article: str, brief: str) -> str:
-        if self.demo_mode:
-            return self.demo.review(project, article=article)
-        style = self.styles.read(self.styles.ensure_session(project.slug), "writing")["text"]
-        params = self.styles.layout_params(project.slug)
-        theme = self.themes.resolve(
-            self.themes.effective_id(project.slug, params.get("legacyTheme")), accent=params.get("accent")
-        )
-        theme_guide = f"{theme['id']}（{theme['meta'].get('name', theme['id'])}）\n{theme['meta'].get('guide', '')}"
-        system = {"role": "system", "content": self._system(project)}
-        outputs: list[str] = []
-        errors: list[str] = []
-        with ThreadPoolExecutor(max_workers=min(4, len(REVIEW_ROLES))) as pool:
-            futures = {
-                pool.submit(
-                    self._chat,
-                    [
-                        system,
-                        *review_prompt(
-                            article=article,
-                            brief=brief,
-                            role=role,
-                            focus=focus,
-                            style=style,
-                            theme=theme_guide,
-                        ),
-                    ],
-                    temperature=0.4,
-                ): role
-                for role, focus in REVIEW_ROLES
-            }
-            for future in as_completed(futures):
-                role = futures[future]
-                try:
-                    outputs.append(f"## {role}\n\n{future.result()}")
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"{role}: {exc}")
-        if not outputs:
-            raise LLMError("所有评审角色都失败了：" + "；".join(errors), "REVIEW_FAILED")
-        merged = self._chat(
-            [
-                system,
-                *merge_review_prompt("\n\n".join(outputs)[: self.settings.max_context_chars]),
-            ],
-            temperature=0.2,
-        )
-        if errors:
-            merged += "\n\n> 部分评审角色失败：" + "；".join(errors)
-        return merged
 
     def title(self, project: Project, *, article: str, brief: str) -> dict[str, Any]:
         if self.demo_mode:

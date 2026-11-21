@@ -7,7 +7,7 @@ from typing import Any
 from .storage import char_count
 
 
-def system_prompt(*, writing_style: str, layout_style: str, theme_name: str, theme_guide: str, original_mode: bool = True, max_rounds: int = 3) -> str:
+def system_prompt(*, writing_style: str, theme_name: str, theme_guide: str, original_mode: bool = True, max_rounds: int = 3) -> str:
     original = (
         """
 ## 原创模式（默认开启）
@@ -35,6 +35,7 @@ def system_prompt(*, writing_style: str, layout_style: str, theme_name: str, the
 - 书面素材 A01、A02…；口语/字幕 S01、S02…。
 - 每段一个锚点：书面 `[¶3]`，口语 `[¶3 @12:30]`。
 - 正文每个事实、数据、引语后带内部标记：`[A01¶3]`、`[A01¶3-5]`、`[S01@12:30]`；多个出处写成 `[A01¶3；S02@05:10]`。
+- 标记只有这三种写法：`[A01¶3]`、`[S01@12:30]`、`[观点]`。不要写 `[A02标题]` 这类自由文本；不要在同一对括号里混写来源和观点（要同时标就写成 `[A01¶3][观点]`）。
 - 作者自己的判断标 `[观点]`。标记只供核对，排版时自动去掉，正文文字本身不提素材。
 - 素材空白：不编内容。能写成作者观点就标 [观点]；不能就保留为空白，在大纲/评审里明确列出。
 - 原始素材不改；口语稿整理只写 clean.md，不覆盖 content.md。
@@ -50,9 +51,6 @@ def system_prompt(*, writing_style: str, layout_style: str, theme_name: str, the
 
 ## 文笔风格
 {writing_style}
-
-## 排版补充说明
-{layout_style}
 """
 
 
@@ -134,47 +132,29 @@ def digest_prompt(source: dict[str, Any], content: str) -> list[dict[str, str]]:
     ]
 
 
-def compare_prompt(digests: str) -> list[dict[str, str]]:
-    return [
-        {
-            "role": "user",
-            "content": f"""把下面所有素材 digest 做跨素材对比，输出 sources/compare.md。
-
-必须包含：
-- 共识：几份素材都支持的观点（列锚点）
-- 冲突：说法不一致的地方（列双方锚点）
-- 空白：brief 里想写、但素材里没有支撑的内容
-- 主素材建议：哪些素材信息量最大
-
-素材 digest：
-{digests}""",
-        }
-    ]
-
-
 def outline_prompt(*, brief: str, material_context: str, feedback: str = "") -> list[dict[str, str]]:
     return [
         {
             "role": "user",
-            "content": f"""根据 brief 和素材，写 outline.md。
+            "content": f"""根据 brief 和素材，写一份简洁的 outline.md。
 
-要求：
-- 角度必须是你自己的，不要沿用某份素材的标题、开头和章节顺序。
-- 每个要点都标注素材锚点，精确到段落或时间段。
-- 每节写字数预算，总和接近 brief 的篇幅。
-- 配图计划：约每 800–1000 字一张、全文 3–5 张；写图要表达什么 + 搜图关键词（英文在前，中文在后，用 | 隔开）。
-- 文末列出：未用到的素材及原因、冲突及处理、空白。
+只写两层：章节标题 + 每节大致写什么。
 
 格式：
 # 大纲：<暂定标题>
-- 角度：
-- 目标读者 / 篇幅：
-- 开头钩子：
 
-## 01 <小节标题>（约 600 字）
-- 要点：…… [A01¶3-5]
-- 金句候选：“……” [S01@13:05]
-- 配图：…… —— google: English keywords | 中文关键词
+## 01 / 小节标题
+用 2–4 句话说明这一节大概写什么：先说什么、再说什么、用哪个事实或数字支撑。带上素材锚点，例如 [A01¶3]。
+
+## 02 / 小节标题
+……
+
+要求：
+- 小节标题用「两位编号 + 斜杠 + 短语」，从 01 开始，3–5 节。
+- 每节只写「这一节讲什么」，不要列金句候选、配图计划、字数预算，也不要写未用素材/冲突/空白清单。
+- 节与节之间要有推进关系（是什么 → 为什么 → 意味着什么），不要平铺罗列。
+- 角度必须是你自己的，不要沿用某份素材的标题、开头和章节顺序。
+- 事实和数据后面标素材锚点，精确到段落或时间段；作者判断标 [观点]。
 
 brief：
 {brief}
@@ -197,7 +177,7 @@ def draft_prompt(*, brief: str, outline: str, snippets: str, feedback: str = "",
 - 小节用 `## 01 / 标题`，不要用一级标题。
 - 事实、数据、引语后带内部锚点；作者判断标 `[观点]`。
 - 原创模式：正文不出现“素材/视频/博主/原作者/本文整理自”；不照搬素材句子。
-- 按大纲的配图计划放 `![图注](ww-img:pending "google: …")` 占位符。
+- 按系统要求放 `![图注](ww-img:pending "google: …")` 占位符：约每 800–1000 字一张，全文 3–5 张。
 - 按当前主题的 markdown 组件用量写：引用块、提示框、数据卡片、表格、强调。
 - 目标篇幅按 brief 里的字数写；写完整篇文章，不要只写提纲。
 - 直接输出 Markdown 全文：不要用 ``` 围栏包住，不要写“已按大纲写完”“约 N 字”之类的说明文字。
@@ -213,67 +193,6 @@ brief：
 
 {f'已有正文（请在此基础上修改）：{existing}' if existing else ''}
 {f'用户修改意见：{feedback}' if feedback else ''}""",
-        }
-    ]
-
-
-REVIEW_ROLES = [
-    ("事实编辑", "论断与素材是否一致；曲解原意；把“可能”写成“一定”；冲突素材的处理是否公允。"),
-    ("目标读者", "以 brief 里的读者身份阅读：哪里看不懂、想跳过、没被说服。"),
-    ("结构编辑", "开头三行是否抓人；节与节的逻辑衔接；节奏；篇幅分配；结尾。"),
-    ("文字编辑", "AI 腔、套话、长句、重复用词、啰嗦。"),
-    ("合规审查", "广告法极限词、敏感表达、直接引用比例与版权、未经证实的负面表述。"),
-    ("原创审查", "正文是否出现交代素材来源的话；是否有照搬素材的句子或行文顺序。"),
-    ("配图审查", "占位符数量与位置；图注是否说清图里是什么；搜关键词是否具体。只评占位符。"),
-    ("风格审查", "是否符合文笔风格和当前排版主题；引用块、提示框、卡片、强调的用量。"),
-]
-
-
-def review_prompt(*, article: str, brief: str, role: str, focus: str, style: str, theme: str) -> list[dict[str, str]]:
-    return [
-        {
-            "role": "user",
-            "content": f"""你是「{role}」。请评审下面这篇文章，只输出问题，不改文章。
-
-关注点：{focus}
-
-要求：
-- 每条必须从 article.md 逐字复制原句。
-- 级别只能是：必改 / 建议 / 可选。
-- 每条给：原句、级别、问题、建议改法、依据锚点（如果有）。
-- 每个角色不超过 8 条；“必改”只用于事实错误、读者明显看不懂、合规风险、正文提到素材来源。
-- 如果原句在文章里找不到，不要提。
-
-文笔风格：
-{style}
-
-当前主题要求：
-{theme}
-
-brief：
-{brief}
-
-article.md：
-{article}""",
-        }
-    ]
-
-
-def merge_review_prompt(reviews: str) -> list[dict[str, str]]:
-    return [
-        {
-            "role": "user",
-            "content": f"""把下面多角色评审意见合并成一张 reviews.md 表格。
-
-规则：
-- 用原句在文章里搜一下，找不到的意见丢掉。
-- 同一句话上的多条意见合并成一条，角色并列，级别取最严重的。
-- 按 必改 → 建议 → 可选 排序，编号 R1-01、R1-02…
-- 表格列：编号 | 级别 | 角色 | 原句 | 问题 / 建议 | 裁决 | 说明 | 改动。裁决列先空着。
-- 表格前写一句概览：必改几条、建议几条、可选几条。
-
-评审意见：
-{reviews}""",
         }
     ]
 
